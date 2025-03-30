@@ -2,6 +2,7 @@ import dash
 import dash_bootstrap_components as dbc
 from dash import html, dcc, Input, Output, State
 import plotly.express as px
+import logging
 
 # Bootstrap & FontAwesome の読み込み
 external_stylesheets = [
@@ -11,11 +12,8 @@ external_stylesheets = [
 
 app = dash.Dash(__name__, external_stylesheets=external_stylesheets)
 
-# -----------------------------
-# ダミーデータ
-# -----------------------------
-df_iris = px.data.iris()
-df_gapminder = px.data.gapminder().query("country=='Japan' or country=='United States'")
+logger = logging.Logger(__name__)
+logger.level = logging.DEBUG
 
 # -----------------------------
 # ページごとのレイアウト生成関数
@@ -26,16 +24,16 @@ def layout_home():
         html.P("ここはトップページです。サイドバーから別のページに遷移できます。")
     ], style={"margin": "2rem"})
 
-def layout_graph1():
-    fig = px.scatter(df_iris, x="sepal_width", y="sepal_length",
+def layout_graph1(df_data):
+    fig = px.scatter(df_data, x="sepal_width", y="sepal_length",
                      color="species", title="Iris Scatter Plot")
     return html.Div([
         html.H2("Graph 1: Irisデータ（散布図）"),
         dcc.Graph(figure=fig)
     ], style={"margin": "2rem"})
 
-def layout_graph2():
-    fig = px.line(df_gapminder, x="year", y="lifeExp",
+def layout_graph2(df_data):
+    fig = px.line(df_data, x="year", y="lifeExp",
                   color="country", title="Life Expectancy over Time")
     return html.Div([
         html.H2("Graph 2: Gapminderデータ（折れ線グラフ）"),
@@ -55,23 +53,6 @@ def layout_settings():
     ], style={"margin": "2rem"})
 
 # -----------------------------
-# ページ情報のリスト
-# -----------------------------
-# ここで定義した情報が、サイドバー生成やページ表示のコールバックで共通利用されます。
-page_list = [
-    {"name": "Home", "href": "/", "layout": layout_home},
-    {"name": "Graph 1", "href": "/graph1", "layout": layout_graph1},
-    {"name": "Graph 2", "href": "/graph2", "layout": layout_graph2},
-    {"name": "Settings2", "href": "/settings2", "layout": layout_settings2},
-    {"name": "Settings", "href": "/settings", "layout": layout_settings},
-]
-
-# -----------------------------
-# ページ情報リストから辞書マッピングを自動生成
-# -----------------------------
-page_map = {page["href"]: page["layout"] for page in page_list}
-
-# -----------------------------
 # サイドバー用メニュー生成関数
 # -----------------------------
 def generate_sidebar_menu(pages, exclude_hrefs=None):
@@ -87,106 +68,30 @@ def generate_sidebar_menu(pages, exclude_hrefs=None):
                 className="border-0"
             )
         )
+    logger.debug(menu_items)
     return menu_items
 
 # -----------------------------
-# ヘッダー (Navbar)
-# -----------------------------
-header = dbc.Navbar(
-    dbc.Container([
-        dbc.NavbarBrand("My Dash App", href="/", className="me-auto"),
-        dbc.NavItem(
-            dbc.NavLink(
-                html.I(className="fa fa-cog", style={"fontSize": "1.3em"}),
-                href="/settings",
-                id="settings-icon-link"
-            )
-        ),
-    ], fluid=True),
-    color="primary",
-    dark=True,
-    className="mb-2"
-)
-
-# -----------------------------
-# サイドバー
-# -----------------------------
-sidebar = html.Div([
-    # ハンバーガーアイコン部
-    html.Div(
-        dbc.Button(
-            html.I(className="fa fa-bars"),
-            id="sidebar-toggle",
-            style={
-                "background": "transparent",
-                "border": "none",
-                "fontSize": "1.4em",
-                "margin": "0.5rem",
-                "color": "#333",
-            }
-        ),
-        style={"display": "flex", "alignItems": "center", "justifyContent": "flex-start"}
-    ),
-    # メニューリスト部（初期 style に display:block を設定）
-    html.Div(
-        id="menu-container",
-        style={"display": "block"},
-        children=dbc.ListGroup(
-            generate_sidebar_menu(page_list, exclude_hrefs=["/settings"]),
-            flush=True,
-        )
-    ),
-],
-    id="sidebar",
-    className="bg-light",
-    style={
-        "position": "fixed",
-        "top": "56px",         # ヘッダーの高さ
-        "left": 0,
-        "bottom": 0,
-        "width": "250px",      # 展開時の幅
-        "padding": "0.5rem",
-        "transition": "width 0.3s, padding 0.3s",
-        "overflow": "auto",
-        "zIndex": 1000
-    }
-)
-
-# -----------------------------
-# メインコンテンツ
-# -----------------------------
-main_content = html.Div(
-    id="page-content",
-    style={
-        "marginLeft": "250px",
-        "transition": "margin-left 0.3s"
-    }
-)
-
-# -----------------------------
-# アプリ全体レイアウト
-# -----------------------------
-app.layout = html.Div([
-    dcc.Location(id='url', refresh=False),
-    header,
-    sidebar,
-    main_content
-])
-
-# -----------------------------
-# (A) URLパスに応じたページ表示のコールバック
-#    辞書マッピングを使うことで、リストと自動的に一致させています。
+# URLパスに応じたページ表示のコールバック
+# 辞書マッピングを使うことで、リストと自動的に一致させる
 # -----------------------------
 @app.callback(
     Output('page-content', 'children'),
     Input('url', 'pathname')
 )
 def display_page(pathname):
-    layout_func = page_map.get(pathname, layout_home)
-    return layout_func()
+    layout_entry = page_map.get(pathname, [layout_home])
+    logger.debug(layout_entry)
+    if isinstance(layout_entry, (list, tuple)):
+        if len(layout_entry) == 1:
+            return layout_entry[0]()
+        else:
+            return layout_entry[0](*layout_entry[1:])
+    else:
+        return layout_entry()
 
 # -----------------------------
-# (B) ハンバーガークリックでサイドバー折りたたみのコールバック
+# ハンバーガークリックでサイドバー折りたたみのコールバック
 # -----------------------------
 @app.callback(
     Output("sidebar", "style"),
@@ -220,4 +125,111 @@ def toggle_sidebar(n_clicks, sidebar_style, menu_style, content_style):
         return new_sidebar_style, new_menu_style, new_content_style
 
 if __name__ == "__main__":
+    # -----------------------------
+    # ダミーデータ
+    # -----------------------------
+    df_iris = px.data.iris()
+    df_gapminder = px.data.gapminder().query("country=='Japan' or country=='United States'")
+
+    # -----------------------------
+    # ページ情報のリスト
+    # ここで定義した情報が、サイドバー生成やページ表示のコールバックで共通利用される
+    # -----------------------------
+    page_list = [
+        {"name": "Home", "href": "/", "layout": [layout_home,]},
+        {"name": "Graph 1", "href": "/graph1", "layout": [layout_graph1, df_iris]},
+        {"name": "Graph 2", "href": "/graph2", "layout": [layout_graph2, df_gapminder]},
+        {"name": "Settings2", "href": "/settings2", "layout": [layout_settings2,]},
+        {"name": "Settings", "href": "/settings", "layout": [layout_settings,]},
+    ]
+
+    # -----------------------------
+    # ページ情報リストから辞書マッピングを自動生成
+    # -----------------------------
+    page_map = {page["href"]: page["layout"] for page in page_list}
+
+    # -----------------------------
+    # ヘッダー (Navbar)
+    # -----------------------------
+    header = dbc.Navbar(
+        dbc.Container([
+            dbc.NavbarBrand("My Dash App", href="/", className="me-auto"),
+            dbc.NavItem(
+                dbc.NavLink(
+                    html.I(className="fa fa-cog", style={"fontSize": "1.3em"}),
+                    href="/settings",
+                    id="settings-icon-link"
+                )
+            ),
+        ], fluid=True),
+        color="primary",
+        dark=True,
+        className="mb-2"
+    )
+
+    # -----------------------------
+    # サイドバー
+    # -----------------------------
+    sidebar = html.Div([
+        # ハンバーガーアイコン部
+        html.Div(
+            dbc.Button(
+                html.I(className="fa fa-bars"),
+                id="sidebar-toggle",
+                style={
+                    "background": "transparent",
+                    "border": "none",
+                    "fontSize": "1.4em",
+                    "margin": "0.5rem",
+                    "color": "#333",
+                }
+            ),
+            style={"display": "flex", "alignItems": "center", "justifyContent": "flex-start"}
+        ),
+        # メニューリスト部（初期 style に display:block を設定）
+        html.Div(
+            id="menu-container",
+            style={"display": "block"},
+            children=dbc.ListGroup(
+                generate_sidebar_menu(page_list, exclude_hrefs=["/settings"]),
+                flush=True,
+            )
+        ),
+    ],
+        id="sidebar",
+        className="bg-light",
+        style={
+            "position": "fixed",
+            "top": "56px",         # ヘッダーの高さ
+            "left": 0,
+            "bottom": 0,
+            "width": "250px",      # 展開時の幅
+            "padding": "0.5rem",
+            "transition": "width 0.3s, padding 0.3s",
+            "overflow": "auto",
+            "zIndex": 1000
+        }
+    )
+
+    # -----------------------------
+    # メインコンテンツ
+    # -----------------------------
+    main_content = html.Div(
+        id="page-content",
+        style={
+            "marginLeft": "250px",
+            "transition": "margin-left 0.3s"
+        }
+    )
+
+    # -----------------------------
+    # アプリ全体レイアウト
+    # -----------------------------
+    app.layout = html.Div([
+        dcc.Location(id='url', refresh=False),
+        header,
+        sidebar,
+        main_content
+    ])
+
     app.run(debug=True)
