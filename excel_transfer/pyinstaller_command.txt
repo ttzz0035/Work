@@ -1,1 +1,1 @@
-pyinstaller --onefile --noconsole pptx_translate.py
+pyinstaller --onefile --noconsole excel_transfer.py
