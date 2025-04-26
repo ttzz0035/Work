@@ -1,0 +1,33 @@
+app:
+  window_size: "520x380"
+  default_dir: "./"
+
+components:
+  input_pptx:
+    row: 0
+    column: 0
+    width: 50
+  output_csv:
+    row: 1
+    column: 0
+    width: 50
+  export_button:
+    row: 2
+    column: 0
+    height: 2
+  original_pptx:
+    row: 0
+    column: 0
+    width: 50
+  translated_csv:
+    row: 1
+    column: 0
+    width: 50
+  output_pptx:
+    row: 2
+    column: 0
+    width: 50
+  import_button:
+    row: 3
+    column: 0
+    height: 2
