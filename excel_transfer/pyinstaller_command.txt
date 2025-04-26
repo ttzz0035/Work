@@ -1,0 +1,1 @@
+pyinstaller --onefile --noconsole pptx_translate.py

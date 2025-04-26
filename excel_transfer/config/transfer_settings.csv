@@ -1,0 +1,3 @@
+source_file,source_sheet,source_cell,destination_file,destination_sheet,destination_cell
+source.xlsx,Sheet1,A1,destination.xlsx,Sheet2,B2
+source.xlsx,Sheet1,A2,destination.xlsx,Sheet2,B3

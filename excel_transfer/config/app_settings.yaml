@@ -1,0 +1,8 @@
+app:
+  window_size: "600x350"
+  default_dir: "."
+
+components:
+  transfer_config:
+    row: 0
+    width: 50
