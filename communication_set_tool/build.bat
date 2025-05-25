@@ -1,0 +1,1 @@
+>pyinstaller App.py --noconsole --clean --strip --exclude-module test --exclude-module tkinter.test --exclude-module unittest --exclude-module email --exclude-module http --exclude-module xmlrpc --exclude-module html --exclude-module asyncio
