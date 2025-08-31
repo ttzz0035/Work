@@ -1,0 +1,6 @@
+__pycache__
+build
+dist
+screenshot_app
+_internal
+*.exe

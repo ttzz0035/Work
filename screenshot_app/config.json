@@ -1,0 +1,14 @@
+{
+  "hotkeys": {
+    "capture": "Ctrl+Space",
+    "add_rect": "Ctrl+A",
+    "remove_selected": "Del",
+    "pick_new_color": "Ctrl+Shift+C",
+    "show_hotkeys": "Ctrl+/",
+    "exit_app": "Ctrl+Shift+Q",
+    "rec_start": "Ctrl+Alt+1",
+    "rec_stop": "Ctrl+Alt+2",
+    "rec_play": "Ctrl+Alt+3"
+  },
+  "last_folder": "C:\\Users\\TAIKITAKAHASHI\\LocalRepository\\work\\screenshot_app\\out"
+}
