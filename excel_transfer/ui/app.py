@@ -25,7 +25,7 @@ class ExcelApp:
         self._build_tab_diff()
         self._build_tab_count()
 
-        # ログ領域
+        # ログ領域（上詰め）
         log_frame = ttk.Frame(self.root)
         log_frame.pack(fill="both", expand=False, padx=4, pady=(2, 4))
         ttk.Label(log_frame, text="ログ").pack(anchor="w", pady=(0, 1))
@@ -33,7 +33,7 @@ class ExcelApp:
         self.log.pack(fill="both", expand=True)
         ttk.Button(log_frame, text="コピー", command=self._copy_log).pack(anchor="e", pady=(1, 0))
 
-        # ウィンドウの最小サイズを現状に合わせる
+        # ウィンドウの最小サイズを現状に合わせる（最小限表示）
         self.root.update_idletasks()
         self.root.minsize(self.root.winfo_reqwidth(), self.root.winfo_reqheight())
 
@@ -59,11 +59,12 @@ class ExcelApp:
         ).grid(row=0, column=2, padx=2, pady=2)
 
         # 範囲外セルの扱い: チェックON=skip（継続保存）、OFF=error（即中止）
-        self.var_skip_oor = tk.BooleanVar(value=False)
+        init_skip = bool(self.ctx.user_paths.get("transfer_skip_oor", False))
+        self.var_skip_oor = tk.BooleanVar(value=init_skip)
         ttk.Checkbutton(tab, text="範囲外セルはスキップ（警告のみ）", variable=self.var_skip_oor)\
             .grid(row=1, column=1, sticky="w", padx=4, pady=(0,2))
 
-        # 実行ボタン（文言統一）
+        # 実行ボタン
         ttk.Button(tab, text="実行", command=self.on_transfer).grid(row=0, column=3, rowspan=2, padx=4, pady=2)
 
         tab.grid_columnconfigure(1, weight=1)
@@ -91,17 +92,18 @@ class ExcelApp:
         width_kw = self.ctx.app_settings["components"].get("grep_keyword", {}).get("width", 40)
         self.grep_kw = tk.Entry(tab, width=width_kw)
         self.grep_kw.grid(row=1, column=1, padx=4, pady=2, sticky="we")
+        self.grep_kw.insert(0, self.ctx.user_paths.get("grep_keyword", ""))
 
-        self.var_ic = tk.BooleanVar(value=True)
-        self.var_rx = tk.BooleanVar(value=False)
+        init_ic = bool(self.ctx.user_paths.get("grep_ignore_case", True))
+        init_rx = bool(self.ctx.user_paths.get("grep_use_regex", False))
+        self.var_ic = tk.BooleanVar(value=init_ic)
+        self.var_rx = tk.BooleanVar(value=init_rx)
         ttk.Checkbutton(tab, text=self.ctx.labels["check_ignore_case"], variable=self.var_ic).grid(
             row=1, column=2, padx=2, pady=2
         )
         ttk.Checkbutton(tab, text="正規表現", variable=self.var_rx).grid(row=1, column=3, padx=2, pady=2)
 
-        # 実行ボタン（文言統一）
         ttk.Button(tab, text="実行", command=self.on_grep).grid(row=0, column=4, rowspan=2, padx=4, pady=2)
-
         tab.grid_columnconfigure(1, weight=1)
 
     # ==========================
@@ -138,10 +140,14 @@ class ExcelApp:
         width_keys = self.ctx.app_settings["components"].get("diff_key_cols", {}).get("width", 40)
         self.diff_keys = tk.Entry(tab, width=width_keys)
         self.diff_keys.grid(row=2, column=1, padx=4, pady=2, sticky="we")
+        self.diff_keys.insert(0, self.ctx.user_paths.get("diff_key_cols", ""))
 
-        self.var_formula = tk.BooleanVar(value=False)
-        self.var_ctx = tk.BooleanVar(value=True)
-        self.var_shapes = tk.BooleanVar(value=False)
+        init_formula = bool(self.ctx.user_paths.get("diff_compare_formula", False))
+        init_ctx = bool(self.ctx.user_paths.get("diff_include_context", True))
+        init_shapes = bool(self.ctx.user_paths.get("diff_compare_shapes", False))
+        self.var_formula = tk.BooleanVar(value=init_formula)
+        self.var_ctx = tk.BooleanVar(value=init_ctx)
+        self.var_shapes = tk.BooleanVar(value=init_shapes)
 
         ttk.Checkbutton(tab, text=self.ctx.labels["check_compare_formula"], variable=self.var_formula).grid(
             row=2, column=2, padx=2, pady=2
@@ -153,9 +159,7 @@ class ExcelApp:
             row=3, column=2, sticky="w", padx=4, pady=(0, 2)
         )
 
-        # 実行ボタン（文言統一）
         ttk.Button(tab, text="実行", command=self.on_diff).grid(row=0, column=3, rowspan=4, padx=4, pady=2)
-
         tab.grid_columnconfigure(1, weight=1)
 
     # ==========================
@@ -168,6 +172,8 @@ class ExcelApp:
         ttk.Label(tab, text="対象Excel").grid(row=0, column=0, sticky="w", padx=4, pady=2)
         self.count_files = tk.Entry(tab, width=70)
         self.count_files.grid(row=0, column=1, padx=4, pady=2, sticky="we")
+        self.count_files.insert(0, self.ctx.user_paths.get("count_files", ""))
+
         ttk.Button(
             tab,
             text="...",
@@ -180,14 +186,15 @@ class ExcelApp:
         ttk.Label(tab, text="シート名（空=先頭）").grid(row=1, column=0, sticky="w", padx=4, pady=2)
         self.count_sheet = tk.Entry(tab, width=30)
         self.count_sheet.grid(row=1, column=1, padx=4, pady=2, sticky="w")
+        self.count_sheet.insert(0, self.ctx.user_paths.get("count_sheet", ""))
 
         ttk.Label(tab, text="開始セル").grid(row=2, column=0, sticky="w", padx=4, pady=2)
         self.count_start = tk.Entry(tab, width=12)
         self.count_start.grid(row=2, column=1, padx=4, pady=2, sticky="w")
-        self.count_start.insert(0, "B2")
+        self.count_start.insert(0, self.ctx.user_paths.get("count_start", "B2"))
 
         ttk.Label(tab, text="方向").grid(row=3, column=0, sticky="w", padx=4, pady=2)
-        self.count_dir = tk.StringVar(value="row")
+        self.count_dir = tk.StringVar(value=self.ctx.user_paths.get("count_dir", "row"))
         ttk.Radiobutton(tab, text="行方向", variable=self.count_dir, value="row").grid(
             row=3, column=1, sticky="w", padx=4, pady=2
         )
@@ -195,13 +202,13 @@ class ExcelApp:
             row=3, column=1, sticky="w", padx=80, pady=2
         )
 
-        ttk.Label(tab, text="許容空白数（逐次モードのみ）").grid(row=4, column=0, sticky="w", padx=4, pady=2)
+        ttk.Label(tab, text="許容空白数（高速/精密 共通）").grid(row=4, column=0, sticky="w", padx=4, pady=2)
         self.count_tol = tk.Spinbox(tab, from_=0, to=1000, width=6)
         self.count_tol.grid(row=4, column=1, padx=4, pady=2, sticky="w")
         self.count_tol.delete(0, "end")
-        self.count_tol.insert(0, "0")
+        self.count_tol.insert(0, str(self.ctx.user_paths.get("count_tolerate_blanks", 0)))
 
-        self.count_mode = tk.StringVar(value="jump")
+        self.count_mode = tk.StringVar(value=self.ctx.user_paths.get("count_mode", "jump"))
         ttk.Radiobutton(tab, text="高速（Ctrl+矢印）", variable=self.count_mode, value="jump").grid(
             row=5, column=1, sticky="w", padx=4, pady=2
         )
@@ -209,12 +216,11 @@ class ExcelApp:
             row=5, column=1, sticky="w", padx=160, pady=2
         )
 
-        # 右下固定のための伸縮（スプリング行/列）
-        tab.grid_columnconfigure(1, weight=1)  # 入力列の伸縮
-        tab.grid_columnconfigure(3, weight=1)  # 右側スペースの伸縮
-        tab.grid_rowconfigure(6, weight=1)    # 下側スペースの伸縮
+        # 右下固定
+        tab.grid_columnconfigure(1, weight=1)
+        tab.grid_columnconfigure(3, weight=1)
+        tab.grid_rowconfigure(6, weight=1)
 
-        # 実行ボタンを右下へ固定（文言統一）
         run_btn = ttk.Button(tab, text="実行", command=self.on_count)
         run_btn.grid(row=7, column=3, padx=6, pady=6, sticky="se")
 
@@ -257,12 +263,15 @@ class ExcelApp:
             self.ctx.save_user_path(key, path)
 
     # ==========================
-    # ハンドラ
+    # ハンドラ（実行時に設定を保存）
     # ==========================
     def on_transfer(self):
+        # 保存
+        self.ctx.save_user_path("transfer_config", self.transfer_entry.get())
+        self.ctx.save_user_path("transfer_skip_oor", bool(self.var_skip_oor.get()))
+
+        # 実行
         paths = [p for p in self.transfer_entry.get().split("?") if p]
-        # スキップOFF → "error"（範囲外で即中止）
-        # スキップON  → "skip"  （警告ログだけ出して継続・保存まで実行）
         mode = "skip" if self.var_skip_oor.get() else "error"
         req = TransferRequest(csv_paths=paths, out_of_range_mode=mode)
         try:
@@ -272,6 +281,13 @@ class ExcelApp:
             self._append_log(f"[ERR] 転記: {e}")
 
     def on_grep(self):
+        # 保存
+        self.ctx.save_user_path("grep_root", self.grep_root.get().strip())
+        self.ctx.save_user_path("grep_keyword", self.grep_kw.get().strip())
+        self.ctx.save_user_path("grep_ignore_case", bool(self.var_ic.get()))
+        self.ctx.save_user_path("grep_use_regex", bool(self.var_rx.get()))
+
+        # 実行
         req = GrepRequest(
             root_dir=self.grep_root.get().strip(),
             keyword=self.grep_kw.get().strip(),
@@ -285,6 +301,15 @@ class ExcelApp:
             self._append_log(f"[ERR] Grep: {e}")
 
     def on_diff(self):
+        # 保存
+        self.ctx.save_user_path("diff_file_a", self.diff_a.get().strip())
+        self.ctx.save_user_path("diff_file_b", self.diff_b.get().strip())
+        self.ctx.save_user_path("diff_key_cols", self.diff_keys.get().strip())
+        self.ctx.save_user_path("diff_compare_formula", bool(self.var_formula.get()))
+        self.ctx.save_user_path("diff_include_context", bool(self.var_ctx.get()))
+        self.ctx.save_user_path("diff_compare_shapes", bool(self.var_shapes.get()))
+
+        # 実行
         req = DiffRequest(
             file_a=self.diff_a.get().strip(),
             file_b=self.diff_b.get().strip(),
@@ -300,6 +325,15 @@ class ExcelApp:
             self._append_log(f"[ERR] Diff: {e}")
 
     def on_count(self):
+        # 保存
+        self.ctx.save_user_path("count_files", self.count_files.get().strip())
+        self.ctx.save_user_path("count_sheet", self.count_sheet.get().strip())
+        self.ctx.save_user_path("count_start", self.count_start.get().strip())
+        self.ctx.save_user_path("count_dir", self.count_dir.get())
+        self.ctx.save_user_path("count_tolerate_blanks", int(self.count_tol.get() or 0))
+        self.ctx.save_user_path("count_mode", self.count_mode.get())
+
+        # 実行
         files = [p for p in self.count_files.get().split("?") if p]
         req = CountRequest(
             files=files,

@@ -1,0 +1,22 @@
+app:
+  default_dir: ''
+  window_size: 900x650
+components:
+  diff_file_a:
+    row: 0
+    width: 70
+  diff_file_b:
+    row: 1
+    width: 70
+  diff_key_cols:
+    row: 2
+    width: 40
+  grep_keyword:
+    row: 1
+    width: 40
+  grep_root:
+    row: 0
+    width: 70
+  transfer_config:
+    row: 0
+    width: 70

@@ -1,56 +1,74 @@
 # excel_transfer/services/grep.py
-import os, csv, re
-from pathlib import Path
+import os
+import re
+import xlwings as xw
 from typing import Tuple, List
 from models.dto import GrepRequest, LogFn
-from utils.excel import open_app, safe_kill, list_excel_files, used_range_2d_values, normalize_2d
+
+EXCEL_EXTS = (".xlsx", ".xlsm", ".xlsb", ".xls")
+
+def _find_excel_files(root: str) -> List[str]:
+    hits = []
+    for dp, _, fns in os.walk(root):
+        for fn in fns:
+            if fn.lower().endswith(EXCEL_EXTS):
+                hits.append(os.path.join(dp, fn))
+    return hits
+
+def _match(text: str, pat: str, use_regex: bool, ignore_case: bool) -> bool:
+    if text is None:
+        return False
+    s = str(text)
+    if use_regex:
+        flags = re.IGNORECASE if ignore_case else 0
+        return re.search(pat, s, flags) is not None
+    else:
+        if ignore_case:
+            return pat.lower() in s.lower()
+        return pat in s
 
 def run_grep(req: GrepRequest, ctx, logger, append_log: LogFn) -> Tuple[str, int]:
-    if not req.root_dir or not os.path.isdir(req.root_dir):
-        raise ValueError("検索ルートフォルダが不正です。")
-    if not req.keyword:
-        raise ValueError("キーワードを入力してください。")
-
     append_log("=== Grep開始 ===")
-    files = list_excel_files(Path(req.root_dir))
-    hits: List[tuple] = []
-    app = open_app()
-    try:
-        pattern = None
-        if req.use_regex:
-            flags = re.IGNORECASE if req.ignore_case else 0
-            pattern = re.compile(req.keyword, flags)
-        kw = req.keyword.lower() if req.ignore_case else req.keyword
+    if not os.path.isdir(req.root_dir):
+        raise ValueError(f"ディレクトリが存在しません: {req.root_dir}")
 
-        for f in files:
+    files = _find_excel_files(req.root_dir)
+    total = 0
+    for path in files:
+        app = None
+        book = None
+        try:
+            app = xw.App(visible=False, add_book=False)
+            book = app.books.open(path, read_only=True)
+            for sht in book.sheets:
+                vr = sht.used_range
+                vals = vr.value
+                # used_range が None のケースに備える
+                if vals is None:
+                    continue
+                # 1セルの場合はスカラ、行列の場合は2D配列
+                if not isinstance(vals, list):
+                    vals = [[vals]]
+                for r, row in enumerate(vals, start=vr.row):
+                    # row がスカラの可能性（1列）にも対応
+                    if not isinstance(row, list):
+                        row = [row]
+                    for c, v in enumerate(row, start=vr.column):
+                        if _match(v, req.keyword, req.use_regex, req.ignore_case):
+                            total += 1
+                            append_log(f"[HIT] {os.path.basename(path)}[{sht.name}!R{r}C{c}] {str(v)[:60]}")
+        except Exception as e:
+            append_log(f"[WARN] Grep失敗: {path} ({e})")
+        finally:
             try:
-                wb = app.books.open(str(f))
-            except Exception as e:
-                if logger: logger.warning(f"[WARN] オープン失敗: {f} ({e})")
-                continue
+                if book:
+                    book.close()  # ← save引数は渡さない
+            except Exception:
+                pass
             try:
-                for sh in wb.sheets:
-                    vals = normalize_2d(used_range_2d_values(sh, as_formula=False))
-                    for r_idx, row in enumerate(vals, start=1):
-                        for c_idx, v in enumerate(row, start=1):
-                            s = "" if v is None else str(v)
-                            if req.use_regex:
-                                if pattern.search(s):
-                                    hits.append((str(f), sh.name, r_idx, c_idx, s))
-                            else:
-                                tgt = s.lower() if req.ignore_case else s
-                                if kw in tgt:
-                                    hits.append((str(f), sh.name, r_idx, c_idx, s))
-            finally:
-                wb.close(save=False)
-                append_log(f"Grep完了: {f.name}")
-    finally:
-        safe_kill(app)
+                if app:
+                    app.kill()
+            except Exception:
+                pass
 
-    out = os.path.join(ctx.output_dir, "grep_results.csv")
-    os.makedirs(ctx.output_dir, exist_ok=True)
-    with open(out, "w", newline="", encoding="utf-8-sig") as fw:
-        w = csv.writer(fw)
-        w.writerow(["file","sheet","row","col","value"])
-        w.writerows(hits)
-    return out, len(hits)
+    return (req.root_dir, total)
