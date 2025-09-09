@@ -9999,3 +9999,5 @@ src.xlsx,Sheet1,D75,-3,1,dst.xlsx,Sheet1,F851,1,2
 src.xlsx,Sheet1,A154,3,-2,dst.xlsx,Sheet1,C364,0,0
 src.xlsx,Sheet1,F452,3,-1,dst.xlsx,Sheet1,A974,-2,0
 src.xlsx,Sheet1,C124,-1,3,dst.xlsx,Sheet1,F467,-2,2
+src.xlsx,受注一覧,A{受注No=12345},2,1,dst.xlsx,集計,B5,0,0
+src.xlsx,商品台帳,1{商品名},5,0,dst.xlsx,発送リスト,C10,0,0

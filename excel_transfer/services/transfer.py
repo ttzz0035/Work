@@ -1,19 +1,60 @@
 # excel_transfer/services/transfer.py
-import os, csv, shutil, datetime, re, gc
-import xlwings as xw
-from typing import Dict, Tuple, List, Optional, Set
-from openpyxl.utils import column_index_from_string, get_column_letter
-from models.dto import TransferRequest, LogFn
+import os
+import csv
+import shutil
+import datetime
+import re
+import gc
+from typing import Dict, Tuple, Optional
 
-# A1セル / A1:A1 範囲（$/小文字許容）
+import xlwings as xw
+from openpyxl.utils import column_index_from_string, get_column_letter
+
+from models.dto import TransferRequest, LogFn
+from utils.search_utils import compile_matcher, find_in_column, find_in_row
+
+# A1 / A1:A1
 _A1_RE_CELL  = re.compile(r"^\$?([A-Z]+)\$?(\d+)$", re.I)
 _A1_RE_RANGE = re.compile(r"^\$?([A-Z]+)\$?(\d+)\s*:\s*\$?([A-Z]+)\$?(\d+)$", re.I)
+# 検索式: A{文字列} もしくは 1{文字列}
+_SEARCH_RE   = re.compile(r"^([A-Z]+|\d+)\{(.+)\}$")
 
 
 # ==========
 # ユーティリティ
 # ==========
-def _backup_file(file_path, logger):
+def _a1(row: int, col: int) -> str:
+    return f"{get_column_letter(col)}{row}"
+
+
+def _parse_cell(a1: str) -> Tuple[int, int]:
+    m = _A1_RE_CELL.match(a1.strip())
+    if not m:
+        raise ValueError(f"無効なセル形式: {a1}")
+    col, row = m.group(1), m.group(2)
+    return int(row), column_index_from_string(col.upper())
+
+
+def _parse_ref(a1_or_range: str):
+    s = a1_or_range.strip()
+    m2 = _A1_RE_RANGE.match(s)
+    if m2:
+        r1, c1 = int(m2.group(2)), column_index_from_string(m2.group(1).upper())
+        r2, c2 = int(m2.group(4)), column_index_from_string(m2.group(3).upper())
+        # 正規化
+        r1, r2 = (r1, r2) if r1 <= r2 else (r2, r1)
+        c1, c2 = (c1, c2) if c1 <= c2 else (c2, c1)
+        return (r1, c1), (r2, c2)
+    r, c = _parse_cell(s)
+    return (r, c), None
+
+
+def _log(append_log: LogFn, level: str, code: str, **fields):
+    parts = [f"[{level.upper()}][{code}]"] + [f"{k}={v}" for k, v in fields.items()]
+    append_log(" ".join(parts))
+
+
+def _backup_file(file_path: str, logger):
     if os.path.exists(file_path):
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_path = f"{os.path.splitext(file_path)[0]}_backup_{ts}.xlsx"
@@ -24,162 +65,97 @@ def _backup_file(file_path, logger):
     return ""
 
 
-def _a1(row: int, col: int) -> str:
-    return f"{get_column_letter(col)}{row}"
-
-
-def _parse_cell(a1: str) -> Tuple[int, int]:
-    m = _A1_RE_CELL.match(a1.strip())
+# ==========
+# 検索式の解決（完全一致）
+# ==========
+def _resolve_search_cell(sht: xw.Sheet, expr: str, r_off: int, c_off: int,
+                         role: str, append_log: LogFn, job_id: int, csv_row: int,
+                         skip_policy: str) -> Tuple[Tuple[int, int], bool]:
+    """
+    expr: 'A{keyword}'（列検索→行特定） or '1{keyword}'（行検索→列特定）
+    戻り値: ((row, col), skipped)
+    """
+    m = _SEARCH_RE.match(expr.strip())
     if not m:
-        raise ValueError(f"無効なセル形式: {a1}（例: A1 / $B$3）")
-    col, row = m.group(1), m.group(2)
-    return int(row), column_index_from_string(col.upper())
+        raise ValueError(f"{role}: 検索書式が不正: {expr}")
+    token, keyword = m.group(1), m.group(2)
+
+    matcher = compile_matcher(keyword, use_regex=False, ignore_case=False)
+    used = sht.used_range
+
+    if token.isalpha():
+        # 列A/B/... を上から検索 → 行を特定
+        col = column_index_from_string(token.upper())
+        hit_r = find_in_column(sht, token.upper(), matcher)
+        if hit_r is None:
+            if skip_policy == "skip":
+                _log(append_log, "WARN", f"{role}_ROW_NOT_FOUND", job=job_id, csv_row=csv_row, col=token, key=keyword)
+                return (1, 1), True
+            raise ValueError(f"{role}: 検索ヒットなし（列={token}, '{keyword}'）")
+        fr, fc = hit_r + int(r_off or 0), col + int(c_off or 0)
+        _log(append_log, "INFO", f"{role}_SEARCH_HIT",
+             job=job_id, csv_row=csv_row, base=f"(r:{hit_r},c:{col})",
+             offset=f"(r+{r_off},c+{c_off})", final=f"(r:{fr},c:{fc})")
+        return (fr, fc), False
+    else:
+        # 行番号 1/2/... を左から検索 → 列を特定
+        row = int(token)
+        # 行の存在ガード
+        if row < used.row or row > used.last_cell.row:
+            if skip_policy == "skip":
+                _log(append_log, "WARN", f"{role}_ROW_OOR", job=job_id, csv_row=csv_row, row=row)
+                return (1, 1), True
+            raise ValueError(f"{role}: 行が範囲外: {row}")
+
+        hit_c = find_in_row(sht, row, matcher)
+        if hit_c is None:
+            if skip_policy == "skip":
+                _log(append_log, "WARN", f"{role}_COL_NOT_FOUND", job=job_id, csv_row=csv_row, row=row, key=keyword)
+                return (1, 1), True
+            raise ValueError(f"{role}: 検索ヒットなし（行={row}, '{keyword}'）")
+        fr, fc = row + int(r_off or 0), hit_c + int(c_off or 0)
+        _log(append_log, "INFO", f"{role}_SEARCH_HIT",
+             job=job_id, csv_row=csv_row, base=f"(r:{row},c:{hit_c})",
+             offset=f"(r+{r_off},c+{c_off})", final=f"(r:{fr},c:{fc})")
+        return (fr, fc), False
 
 
-def _parse_ref(a1_or_range: str) -> Tuple[Tuple[int,int], Optional[Tuple[int,int]]]:
+def _resolve_any_cell_or_range(sht: xw.Sheet, expr: str, r_off: int, c_off: int,
+                               role: str, append_log: LogFn, job_id: int, csv_row: int,
+                               skip_policy: str):
     """
-    単セル: ((r1,c1), None)
-    範囲  : ((r1,c1), (r2,c2))  ※r1<=r2, c1<=c2 に正規化
+    A1/範囲 → ((r,c),(r2,c2)|None), skipped=False
+    検索式   → ((r,c), None), skipped=bool
     """
-    s = a1_or_range.strip()
-    m2 = _A1_RE_RANGE.match(s)
-    if m2:
-        r1, c1 = int(m2.group(2)), column_index_from_string(m2.group(1).upper())
-        r2, c2 = int(m2.group(4)), column_index_from_string(m2.group(3).upper())
-        r1, r2 = (r1, r2) if r1 <= r2 else (r2, r1)
-        c1, c2 = (c1, c2) if c1 <= c2 else (c2, c1)
-        return (r1, c1), (r2, c2)
-    r, c = _parse_cell(s)
-    return (r, c), None
+    s = (expr or "").strip()
+    if _A1_RE_CELL.match(s) or _A1_RE_RANGE.match(s):
+        (r1, c1), tail = _parse_ref(s)
+        r1, c1 = r1 + int(r_off or 0), c1 + int(c_off or 0)
+        if tail:
+            r2, c2 = tail
+            r2, c2 = r2 + int(r_off or 0), c2 + int(c_off or 0)
+            return ((r1, c1), (r2, c2)), False
+        return ((r1, c1), None), False
 
+    if _SEARCH_RE.match(s):
+        rc, skipped = _resolve_search_cell(sht, s, r_off, c_off, role, append_log, job_id, csv_row, skip_policy)
+        return (rc, None), skipped
 
-def _apply_offset_cell(rc: Tuple[int,int], r_off: int, c_off: int) -> Tuple[int,int]:
-    r, c = rc
-    return r + int(r_off or 0), c + int(c_off or 0)
-
-
-def _apply_offset_ref(ref: Tuple[Tuple[int,int], Optional[Tuple[int,int]]], r_off: int, c_off: int):
-    (r1,c1), tail = ref
-    r1n, c1n = _apply_offset_cell((r1,c1), r_off, c_off)
-    if tail is None:
-        return (r1n, c1n), None
-    (r2,c2) = tail
-    r2n, c2n = _apply_offset_cell((r2,c2), r_off, c_off)
-    # 正規化
-    r1n, r2n = (r1n, r2n) if r1n <= r2n else (r2n, r1n)
-    c1n, c2n = (c1n, c2n) if c1n <= c2n else (c2n, c1n)
-    return (r1n, c1n), (r2n, c2n)
-
-
-def _to_a1_range(ref: Tuple[Tuple[int,int], Optional[Tuple[int,int]]]) -> str:
-    (r1,c1), tail = ref
-    if tail is None:
-        return _a1(r1, c1)
-    (r2,c2) = tail
-    return f"{_a1(r1,c1)}:{_a1(r2,c2)}"
-
-
-def _check_oor(ref: Tuple[Tuple[int,int], Optional[Tuple[int,int]]]) -> bool:
-    """行<1 or 列<1 を含むか"""
-    (r1,c1), tail = ref
-    if r1 < 1 or c1 < 1: return True
-    if tail:
-        r2,c2 = tail
-        if r2 < 1 or c2 < 1: return True
-    return False
-
-
-def _log(append_log: LogFn, level: str, code: str, **fields):
-    parts: List[str] = [f"[{level.upper()}][{code}]"]
-    for k, v in fields.items():
-        parts.append(f"{k}={v}")
-    append_log(" ".join(parts))
-
-
-def _fmt_rc(ref: Tuple[Tuple[int,int], Optional[Tuple[int,int]]]) -> str:
-    """A1化せず、常に (r,c) 表現で返す（範囲外の負数でも安全）"""
-    (r1,c1), tail = ref
-    if tail is None:
-        return f"(r:{r1},c:{c1})"
-    (r2,c2) = tail
-    return f"(r:{r1},c:{c1})~(r:{r2},c:{c2})"
-
-
-def _calc_with_policy(
-    a1_or_range: str, r_off: int, c_off: int, policy: str, role: str, job: dict,
-    append_log: LogFn, job_id: int, csv_row: int
-) -> Tuple[Tuple[Tuple[int,int], Optional[Tuple[int,int]]], bool]:
-    """
-    返り値: (ref, skipped)
-      - ref: ((r1,c1), None|((r2,c2)))（offset適用済み）
-      - skipped: True の場合、このジョブをスキップ
-    """
-    base = _parse_ref(a1_or_range)
-    ref = _apply_offset_ref(base, r_off, c_off)
-    if _check_oor(ref):
-        # ★ A1化しないで安全に出力
-        _log(append_log, "WARN", "OOR",
-             job=job_id, csv_row=csv_row, role=role, base=a1_or_range,
-             off=f"(r:{r_off},c:{c_off})", new=_fmt_rc(ref),
-             src=f"{job.get('source_file')}[{job.get('source_sheet')}!{job.get('source_cell')}]",
-             dst=f"{job.get('destination_file')}[{job.get('destination_sheet')}!{job.get('destination_cell')}]")
-        if policy == "skip":
-            _log(append_log, "WARN", "OOR_SKIP", job=job_id, csv_row=csv_row)
-            return ref, True
-        elif policy == "error":
-            # ★ ここでも A1 文字列は作らずに数値で説明
-            raise ValueError(
-                f"無効なセル（オフセットで範囲外）: {a1_or_range} "
-                f"[row_offset={r_off}, col_offset={c_off}] → {_fmt_rc(ref)}"
-            )
-        else:
-            # clamp（現UI未露出）
-            (r1,c1), tail = ref
-            r1, c1 = max(1,r1), max(1,c1)
-            if tail:
-                r2,c2 = tail
-                r2, c2 = max(1,r2), max(1,c2)
-                ref = ( (r1,c1), (r2,c2) )
-            else:
-                ref = ( (r1,c1), None )
-            _log(append_log, "WARN", "OOR_CLAMP", job=job_id, csv_row=csv_row, to=_to_a1_range(ref))
-    return ref, False
+    raise ValueError(f"{role}: セル指定が不正です: {expr}")
 
 
 # ==========
-# 集約・矩形化ヘルパ
-# ==========
-def _cells_from_ref(ref: Tuple[Tuple[int,int], Optional[Tuple[int,int]]]) -> List[Tuple[int,int]]:
-    (r1,c1), tail = ref
-    if tail is None:
-        return [(r1,c1)]
-    (r2,c2) = tail
-    out = []
-    for r in range(r1, r2+1):
-        for c in range(c1, c2+1):
-            out.append((r,c))
-    return out
-
-
-def _rect_of_cells(cells: Set[Tuple[int,int]]) -> Tuple[Tuple[int,int], Tuple[int,int], bool]:
-    """
-    与えられたセル集合が完全に矩形充填しているかを判定。
-    戻り値: ((r1,c1),(r2,c2), is_full)
-      - is_full=True の場合、cells は (r1..r2)×(c1..c2) を完全に含む
-    """
-    rows = [r for r,_ in cells]
-    cols = [c for _,c in cells]
-    r1, r2 = min(rows), max(rows)
-    c1, c2 = min(cols), max(cols)
-    expected = (r2 - r1 + 1) * (c2 - c1 + 1)
-    is_full = (len(cells) == expected)
-    return (r1,c1), (r2,c2), is_full
-
-
-# ==========
-# メイン処理
+# メイン
 # ==========
 def run_transfer_from_csvs(req: TransferRequest, ctx, logger, append_log: LogFn) -> str:
+    """
+    - source_cell / destination_cell:
+        * A1 もしくは A1:A1 の範囲指定
+        * 検索式: A{文字列} / 1{文字列}（完全一致）
+          ※ヒットセルを基点に source_row_offset / source_col_offset（または destination_～）を加算
+    - 取得は基本1セル。source が範囲 & destination が A1（top-left）の場合は範囲サイズ分を一括貼付
+    - out_of_range_mode == "skip" の場合は WARN ログを出して継続、"error" は例外で中止
+    """
     if not req.csv_paths:
         raise ValueError("転記定義CSVが指定されていません。")
 
@@ -191,7 +167,7 @@ def run_transfer_from_csvs(req: TransferRequest, ctx, logger, append_log: LogFn)
     for csv_path in req.csv_paths:
         workbooks: Dict[str, xw.Book] = {}
         try:
-            # 設定CSV読み込み（上から順に処理）
+            # 設定CSV読込
             try:
                 with open(csv_path, newline="", encoding="utf-8") as f:
                     jobs = list(csv.DictReader(f))
@@ -201,17 +177,15 @@ def run_transfer_from_csvs(req: TransferRequest, ctx, logger, append_log: LogFn)
             if not jobs:
                 raise ValueError("転記対象がありません。")
 
-            # 先に宛先ブックのバックアップ
-            involved = set(job["destination_file"] for job in jobs)
-            for file in involved:
+            # 宛先のバックアップ
+            for file in set(job["destination_file"] for job in jobs):
                 full_path = os.path.join(ctx.base_dir, file)
                 _backup_file(full_path, logger)
                 _log(append_log, "INFO", "BACKUP", path=full_path)
 
-            # ---------- 準備：ブック/シートオープン、参照解析 ----------
-            parsed_items = []  # (job_id, csv_row, src_path, dst_path, src_sheet, dst_sheet, src_ref, dst_ref, job)
+            # ジョブ処理
             for job_id, job in enumerate(jobs, start=1):
-                csv_row = job_id + 1  # header=1
+                csv_row = job_id + 1
 
                 src_path = os.path.join(ctx.base_dir, job["source_file"])
                 dst_path = os.path.join(ctx.base_dir, job["destination_file"])
@@ -219,17 +193,15 @@ def run_transfer_from_csvs(req: TransferRequest, ctx, logger, append_log: LogFn)
                 # open source
                 if src_path not in workbooks:
                     if not os.path.exists(src_path):
-                        msg = f"転記元が存在しません: {src_path}"
                         if req.out_of_range_mode == "skip":
                             _log(append_log, "ERROR", "OPEN_SRC_MISSING", job=job_id, csv_row=csv_row, path=src_path)
                             continue
-                        else:
-                            raise FileNotFoundError(msg)
+                        raise FileNotFoundError(f"転記元が存在しません: {src_path}")
                     app = xw.App(visible=False, add_book=False)
                     workbooks[src_path] = app.books.open(src_path, read_only=False)
                     _log(append_log, "INFO", "OPEN_SRC", job=job_id, csv_row=csv_row, path=src_path)
 
-                # open/create dest
+                # open/create destination
                 if dst_path not in workbooks:
                     app = xw.App(visible=False, add_book=False)
                     if os.path.exists(dst_path):
@@ -239,171 +211,119 @@ def run_transfer_from_csvs(req: TransferRequest, ctx, logger, append_log: LogFn)
                         workbooks[dst_path] = app.books.add()
                         _log(append_log, "INFO", "CREATE_DST", job=job_id, csv_row=csv_row, path=dst_path)
 
-                # sheet check
-                if job["source_sheet"] not in workbooks[src_path].sheet_names:
-                    code = "SRC_SHEET_MISSING"
+                src_book = workbooks[src_path]
+                dst_book = workbooks[dst_path]
+
+                # シート存在確認/作成
+                src_sheet = job["source_sheet"]
+                dst_sheet = job["destination_sheet"]
+                if src_sheet not in src_book.sheet_names:
                     if req.out_of_range_mode == "skip":
-                        _log(append_log, "ERROR", code, job=job_id, csv_row=csv_row,
-                             sheet=job["source_sheet"], file=job["source_file"])
+                        _log(append_log, "ERROR", "SRC_SHEET_MISSING", job=job_id, csv_row=csv_row,
+                             sheet=src_sheet, file=os.path.basename(src_path))
                         continue
-                    else:
-                        raise ValueError(f"転記元シートが存在しません: {job['source_sheet']} in {job['source_file']}")
+                    raise ValueError(f"転記元シートが存在しません: {src_sheet}")
+                if dst_sheet not in dst_book.sheet_names:
+                    dst_book.sheets.add(dst_sheet)
+                    _log(append_log, "INFO", "CREATE_DST_SHEET", job=job_id, csv_row=csv_row, sheet=dst_sheet)
 
-                if job["destination_sheet"] not in workbooks[dst_path].sheet_names:
-                    workbooks[dst_path].sheets.add(job["destination_sheet"])
-                    _log(append_log, "INFO", "CREATE_DST_SHEET", job=job_id, csv_row=csv_row,
-                         sheet=job["destination_sheet"], file=job["destination_file"])
+                sht_src = src_book.sheets[src_sheet]
+                sht_dst = dst_book.sheets[dst_sheet]
 
-                # offsets
+                # オフセット
                 s_ro = int(job.get("source_row_offset", 0) or 0)
                 s_co = int(job.get("source_col_offset", 0) or 0)
                 d_ro = int(job.get("destination_row_offset", 0) or 0)
                 d_co = int(job.get("destination_col_offset", 0) or 0)
 
-                # refs
-                src_ref, skip_src = _calc_with_policy(
-                    job["source_cell"], s_ro, s_co, req.out_of_range_mode, "src", job, append_log, job_id, csv_row)
-                if req.out_of_range_mode == "skip" and skip_src:
-                    _log(append_log, "INFO", "SKIP_JOB_SRC", job=job_id, csv_row=csv_row)
-                    continue
+                # 参照解決
+                s_expr = (job.get("source_cell") or "").strip()
+                d_expr = (job.get("destination_cell") or "").strip()
 
-                dst_ref, skip_dst = _calc_with_policy(
-                    job["destination_cell"], d_ro, d_co, req.out_of_range_mode, "dst", job, append_log, job_id, csv_row)
-                if req.out_of_range_mode == "skip" and skip_dst:
-                    _log(append_log, "INFO", "SKIP_JOB_DST", job=job_id, csv_row=csv_row)
-                    continue
+                try:
+                    src_ref, s_skipped = _resolve_any_cell_or_range(
+                        sht_src, s_expr, s_ro, s_co, "SRC", append_log, job_id, csv_row, req.out_of_range_mode)
+                    if req.out_of_range_mode == "skip" and s_skipped:
+                        _log(append_log, "INFO", "SKIP_JOB_SRC", job=job_id, csv_row=csv_row)
+                        continue
 
-                parsed_items.append((
-                    job_id, csv_row, src_path, dst_path,
-                    job["source_sheet"], job["destination_sheet"],
-                    src_ref, dst_ref, job
-                ))
+                    dst_ref, d_skipped = _resolve_any_cell_or_range(
+                        sht_dst, d_expr, d_ro, d_co, "DST", append_log, job_id, csv_row, req.out_of_range_mode)
+                    if req.out_of_range_mode == "skip" and d_skipped:
+                        _log(append_log, "INFO", "SKIP_JOB_DST", job=job_id, csv_row=csv_row)
+                        continue
+                except Exception as e:
+                    if req.out_of_range_mode == "skip":
+                        _log(append_log, "ERROR", "RESOLVE_FAIL", job=job_id, csv_row=csv_row, msg=str(e))
+                        continue
+                    raise
 
-            # ---------- 明示範囲はその場で一括転記 ----------
-            rest_items = []
-            for (job_id, csv_row, src_path, dst_path, src_sh, dst_sh, src_ref, dst_ref, job) in parsed_items:
-                if src_ref[1] is not None and dst_ref[1] is not None:
-                    (sr1,sc1),(sr2,sc2) = src_ref
-                    (dr1,dc1),(dr2,dc2) = dst_ref
-                    src_h, src_w = sr2-sr1+1, sc2-sc1+1
-                    dst_h, dst_w = dr2-dr1+1, dc2-dc1+1
-                    if src_h != dst_h or src_w != dst_w:
-                        raise ValueError(f"範囲サイズ不一致: src={_to_a1_range(src_ref)} dst={_to_a1_range(dst_ref)}")
-                    src_rng = _to_a1_range(src_ref)
-                    dst_rng = _to_a1_range(dst_ref)
-                    vals = workbooks[src_path].sheets[src_sh].range(src_rng).value
-                    workbooks[dst_path].sheets[dst_sh].range(dst_rng).value = vals
+                # 転記
+                (sr1, sc1), s_tail = src_ref
+                (dr1, dc1), d_tail = dst_ref
+
+                if s_tail is not None and d_tail is None:
+                    # source=範囲 / destination=top-left → 範囲サイズ分を一括貼付
+                    (sr2, sc2) = s_tail
+                    h, w = sr2 - sr1 + 1, sc2 - sc1 + 1
+                    dst_rng = f"{_a1(dr1, dc1)}:{_a1(dr1 + h - 1, dc1 + w - 1)}"
+                    src_rng = f"{_a1(sr1, sc1)}:{_a1(sr2, sc2)}"
+                    vals = sht_src.range(src_rng).value
+                    sht_dst.range(dst_rng).value = vals
+                    _log(append_log, "INFO", "WRITE_RANGE_SRC_TO_DST_TL",
+                         job=job_id, csv_row=csv_row,
+                         src=f"{src_sheet}!{src_rng}", dst=f"{dst_sheet}!{dst_rng}", size=f"{h}x{w}")
+                elif s_tail is None and d_tail is None:
+                    # 単セル → 単セル
+                    val = sht_src.range((sr1, sc1)).value
+                    sht_dst.range((dr1, dc1)).value = val
+                    _log(append_log, "INFO", "WRITE_CELL",
+                         job=job_id, csv_row=csv_row,
+                         src=f"{src_sheet}!{_a1(sr1, sc1)}",
+                         dst=f"{dst_sheet}!{_a1(dr1, dc1)}",
+                         val=str(val)[:60] if val is not None else "")
+                elif s_tail is not None and d_tail is not None:
+                    # 範囲 → 範囲（サイズチェック）
+                    (sr2, sc2) = s_tail
+                    (dr2, dc2) = d_tail
+                    sh, sw = sr2 - sr1 + 1, sc2 - sc1 + 1
+                    dh, dw = dr2 - dr1 + 1, dc2 - dc1 + 1
+                    if (sh, sw) != (dh, dw):
+                        if req.out_of_range_mode == "skip":
+                            _log(append_log, "ERROR", "RANGE_SIZE_MISMATCH",
+                                 job=job_id, csv_row=csv_row,
+                                 src=f"{src_sheet}!{_a1(sr1, sc1)}:{_a1(sr2, sc2)}",
+                                 dst=f"{dst_sheet}!{_a1(dr1, dc1)}:{_a1(dr2, dc2)}",
+                                 s_size=f"{sh}x{sw}", d_size=f"{dh}x{dw}")
+                            continue
+                        raise ValueError("範囲サイズ不一致")
+                    src_rng = f"{_a1(sr1, sc1)}:{_a1(sr2, sc2)}"
+                    dst_rng = f"{_a1(dr1, dc1)}:{_a1(dr2, dc2)}"
+                    vals = sht_src.range(src_rng).value
+                    sht_dst.range(dst_rng).value = vals
                     _log(append_log, "INFO", "WRITE_RANGE_EXPLICIT",
                          job=job_id, csv_row=csv_row,
-                         src=f"{os.path.basename(src_path)}[{src_sh}!{src_rng}]",
-                         dst=f"{os.path.basename(dst_path)}[{dst_sh}!{dst_rng}]")
+                         src=f"{src_sheet}!{src_rng}", dst=f"{dst_sheet}!{dst_rng}", size=f"{sh}x{sw}")
                 else:
-                    rest_items.append((job_id, csv_row, src_path, dst_path, src_sh, dst_sh, src_ref, dst_ref, job))
+                    # src=単セル, dst=範囲 → 仕様外
+                    if req.out_of_range_mode == "skip":
+                        _log(append_log, "ERROR", "INVALID_COMBINATION",
+                             job=job_id, csv_row=csv_row,
+                             src=f"{src_sheet}!{_a1(sr1, sc1)}", dst=f"{dst_sheet}!{_a1(*d_tail[0])}:{_a1(*d_tail[1])}")
+                        continue
+                    raise ValueError("定義不正（src=単セル, dst=範囲）")
 
-            # ---------- 単セル群を宛先ファイル/シートでグループ化 ----------
-            from collections import defaultdict
-            groups = defaultdict(list)  # key=(dst_path,dst_sh) -> list of item
-
-            for item in rest_items:
-                job_id, csv_row, src_path, dst_path, src_sh, dst_sh, src_ref, dst_ref, job = item
-                # 片方だけ範囲は定義不正（今回の仕様では不可）
-                if (src_ref[1] is None) != (dst_ref[1] is None):
-                    raise ValueError(
-                        f"定義不正（単セルと範囲の混在）: src={_to_a1_range(src_ref)} dst={_to_a1_range(dst_ref)} "
-                        f"@ job={job_id} csv_row={csv_row}"
-                    )
-                groups[(dst_path, dst_sh)].append(item)
-
-            # ---------- グループごとに「矩形化→形状一致なら一括」「不一致なら行単位」 ----------
-            for (dst_path, dst_sh), items in groups.items():
-                # すべて単セル？
-                all_cell = all(it[6][1] is None and it[7][1] is None for it in items)
-                if not all_cell:
-                    continue
-
-                # src/dst のセル集合
-                src_cells: Set[Tuple[int,int]] = set()
-                dst_cells: Set[Tuple[int,int]] = set()
-                same_src_origin = True
-                base_src_path, base_src_sh = items[0][2], items[0][4]
-
-                for (job_id, csv_row, src_path, _, src_sh, _, src_ref, dst_ref, _) in items:
-                    s = _cells_from_ref(src_ref)  # 単セル→1件
-                    d = _cells_from_ref(dst_ref)
-                    src_cells.update(s)
-                    dst_cells.update(d)
-                    if src_path != base_src_path or src_sh != base_src_sh:
-                        same_src_origin = False
-
-                (sr1,sc1),(sr2,sc2), src_full = _rect_of_cells(src_cells)
-                (dr1,dc1),(dr2,dc2), dst_full = _rect_of_cells(dst_cells)
-                src_h, src_w = sr2-sr1+1, sc2-sc1+1
-                dst_h, dst_w = dr2-dr1+1, dc2-dc1+1
-
-                if src_full and dst_full and (src_h == dst_h) and (src_w == dst_w) and same_src_origin:
-                    # --- 矩形形状一致：一括範囲コピー（COM 2回）
-                    src_rng = f"{_a1(sr1,sc1)}:{_a1(sr2,sc2)}"
-                    dst_rng = f"{_a1(dr1,dc1)}:{_a1(dr2,dc2)}"
-                    vals = workbooks[base_src_path].sheets[base_src_sh].range(src_rng).value
-                    workbooks[dst_path].sheets[dst_sh].range(dst_rng).value = vals
-                    _log(append_log, "INFO", "WRITE_RANGE_AUTO_RECT",
-                         src=f"{os.path.basename(base_src_path)}[{base_src_sh}!{src_rng}]",
-                         dst=f"{os.path.basename(dst_path)}[{dst_sh}!{dst_rng}]",
-                         size=f"{src_h}x{src_w}", cells=len(items))
-                    continue
-
-                # --- フォールバック：行単位の連続区間でまとめ書き
-                row_buckets: Dict[int, List[Tuple[int,int,Tuple,int,Tuple]]] = defaultdict(list)
-                for (job_id, csv_row, src_path, _, src_sh, _, src_ref, dst_ref, job) in items:
-                    (dr, dc), _ = dst_ref
-                    row_buckets[dr].append((dc, job_id, (src_path, src_sh), csv_row, src_ref))
-
-                for row, lst in row_buckets.items():
-                    lst.sort(key=lambda t: (t[2], t[0]))  # by (src_key, dst_col)
-                    i = 0
-                    while i < len(lst):
-                        dst_cols: List[int] = []
-                        src_refs: List[Tuple[Tuple[int,int], Optional[Tuple[int,int]]]] = []
-                        csv_rows: List[int] = []
-                        src_key0 = lst[i][2]
-                        j = i
-                        while j < len(lst) and lst[j][2] == src_key0:
-                            dst_cols.append(lst[j][0])
-                            csv_rows.append(lst[j][3])
-                            src_refs.append(lst[j][4])
-                            j += 1
-
-                        min_col, max_col = min(dst_cols), max(dst_cols)
-                        width = max_col - min_col + 1
-                        values = [[""] * width]
-
-                        spath, ssh = src_key0
-                        for col, sref in zip(dst_cols, src_refs):
-                            src_a1 = _to_a1_range(sref)  # 単セル
-                            v = workbooks[spath].sheets[ssh].range(src_a1).value
-                            v = "" if v is None else v
-                            values[0][col - min_col] = v
-                            _log(append_log, "INFO", "READ_CELL",
-                                 src=f"{os.path.basename(spath)}[{ssh}!{src_a1}]")
-
-                        dst_rng = f"{_a1(row, min_col)}:{_a1(row, max_col)}"
-                        workbooks[dst_path].sheets[dst_sh].range(dst_rng).value = values
-                        _log(append_log, "INFO", "WRITE_RANGE_FALLBACK_ROW",
-                             dst=f"{os.path.basename(dst_path)}[{dst_sh}!{dst_rng}]",
-                             count=len(dst_cols))
-                        i = j
-
-            # 保存（skip時でも保存まで到達）
+            # 保存
             for path, wb in workbooks.items():
                 try:
                     wb.save(path)
                     _log(append_log, "INFO", "SAVE_OK", path=path)
                 except Exception as e:
                     _log(append_log, "ERROR", "SAVE_FAIL", path=path, error=str(e))
-
             note = csv_path
 
         finally:
+            # 後片付け
             for path, wb in workbooks.items():
                 try:
                     app = wb.app

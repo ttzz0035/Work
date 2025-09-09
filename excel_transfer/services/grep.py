@@ -1,9 +1,8 @@
-# excel_transfer/services/grep.py
 import os
-import re
 import xlwings as xw
 from typing import Tuple, List
 from models.dto import GrepRequest, LogFn
+from utils.search_utils import compile_matcher
 
 EXCEL_EXTS = (".xlsx", ".xlsm", ".xlsb", ".xls")
 
@@ -15,18 +14,6 @@ def _find_excel_files(root: str) -> List[str]:
                 hits.append(os.path.join(dp, fn))
     return hits
 
-def _match(text: str, pat: str, use_regex: bool, ignore_case: bool) -> bool:
-    if text is None:
-        return False
-    s = str(text)
-    if use_regex:
-        flags = re.IGNORECASE if ignore_case else 0
-        return re.search(pat, s, flags) is not None
-    else:
-        if ignore_case:
-            return pat.lower() in s.lower()
-        return pat in s
-
 def run_grep(req: GrepRequest, ctx, logger, append_log: LogFn) -> Tuple[str, int]:
     append_log("=== Grep開始 ===")
     if not os.path.isdir(req.root_dir):
@@ -34,6 +21,8 @@ def run_grep(req: GrepRequest, ctx, logger, append_log: LogFn) -> Tuple[str, int
 
     files = _find_excel_files(req.root_dir)
     total = 0
+    matcher = compile_matcher(req.keyword, req.use_regex, req.ignore_case)
+
     for path in files:
         app = None
         book = None
@@ -43,18 +32,15 @@ def run_grep(req: GrepRequest, ctx, logger, append_log: LogFn) -> Tuple[str, int
             for sht in book.sheets:
                 vr = sht.used_range
                 vals = vr.value
-                # used_range が None のケースに備える
                 if vals is None:
                     continue
-                # 1セルの場合はスカラ、行列の場合は2D配列
                 if not isinstance(vals, list):
                     vals = [[vals]]
                 for r, row in enumerate(vals, start=vr.row):
-                    # row がスカラの可能性（1列）にも対応
                     if not isinstance(row, list):
                         row = [row]
                     for c, v in enumerate(row, start=vr.column):
-                        if _match(v, req.keyword, req.use_regex, req.ignore_case):
+                        if matcher(v):
                             total += 1
                             append_log(f"[HIT] {os.path.basename(path)}[{sht.name}!R{r}C{c}] {str(v)[:60]}")
         except Exception as e:
@@ -62,7 +48,7 @@ def run_grep(req: GrepRequest, ctx, logger, append_log: LogFn) -> Tuple[str, int
         finally:
             try:
                 if book:
-                    book.close()  # ← save引数は渡さない
+                    book.close()
             except Exception:
                 pass
             try:
