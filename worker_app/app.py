@@ -190,8 +190,8 @@ class AppController:
             on_change=lambda e: self._on_job_change(dd_job),
         )
 
-        tf_start = ft.TextField(label=LBL_START_DATE, value=self.today_str(), width=(fw // 2 - 4))
-        tf_end   = ft.TextField(label=LBL_END_DATE, value=self.today_str(), width=(fw // 2 - 4))
+        tf_start = ft.TextField(label=LBL_START_DATE, value=self.today_str(), width=(fw // 2.2 - 4))
+        tf_end   = ft.TextField(label=LBL_END_DATE, value=self.today_str(), width=(fw // 2.2 - 4))
 
         # 実行モード
         self.mode_group = ft.RadioGroup(
