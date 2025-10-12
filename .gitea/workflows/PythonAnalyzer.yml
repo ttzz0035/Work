@@ -66,5 +66,6 @@ jobs:
 
       - name: Main Generate UML and count classes
         run: |
+          pip install pylint graphviz
           pyreverse -o dot -p ProjectName .
           dot -Tpng classes_ProjectName.dot -o artifacts_uml.png
