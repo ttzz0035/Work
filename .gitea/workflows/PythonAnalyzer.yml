@@ -18,10 +18,10 @@ jobs:
           pip install pycodestats mypy bandit reuse pytest pytest-cov
 
       # --- Layer 1: Core Quality ---
-      - name: Static analysis (PEP8, LOC, complexity)
+      - name: Main Static analysis (PEP8, LOC, complexity)
         run: |
-          echo "### Code Stats" > artifacts_python.md
-          pycodestats --format markdown --output artifacts_python.md .
+          echo "### Python Code Metrics" > artifacts_python.md
+          pycodestats --by-file . >> artifacts_python.md
 
       # --- Layer 2: Semantic Quality ---
       - name: Type checking (mypy)
