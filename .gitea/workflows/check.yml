@@ -1,0 +1,26 @@
+name: Debug Gitea Runner Info
+run-name: Check runner environment and clone URL
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Show environment variables
+        run: |
+          echo "=== Runner Environment ==="
+          env | grep GITEA
+          echo ""
+          echo "=== Git Remote Info ==="
+          git remote -v || echo "No git repo context"
+          echo ""
+          echo "=== /etc/hosts (inside runner) ==="
+          cat /etc/hosts
+          echo ""
+          echo "=== Current directory ==="
+          pwd
+          ls -la
