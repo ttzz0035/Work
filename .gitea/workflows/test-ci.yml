@@ -4,7 +4,7 @@ on: [push]
 
 jobs:
   hello:
-    runs-on: local
+    runs-on: local-runner
 
     steps:
       - name: Check out code
