@@ -64,8 +64,11 @@ jobs:
         if: always()
         run: cat artifacts_python.md
 
-      - name: Main Generate UML and count classes
-        run: |
-          pip install pylint graphviz
-          pyreverse -o dot -p ProjectName .
-          dot -Tpng classes_ProjectName.dot -o artifacts_uml.png
+      - name: Upload UML artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: uml-dot-files
+          path: |
+            classes_ProjectName.dot
+            packages_ProjectName.dot
+
