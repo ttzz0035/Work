@@ -7,6 +7,21 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: check env
+        run: |
+          echo "=== Runner Environment ==="
+          env | grep GITEA
+          echo ""
+          echo "=== Git Remote Info ==="
+          git remote -v || echo "No git repo context"
+          echo ""
+          echo "=== /etc/hosts (inside runner) ==="
+          cat /etc/hosts
+          echo ""
+          echo "=== Current directory ==="
+          pwd
+          ls -la
+
       - name: Checkout repository
         uses: actions/checkout@v3
 
@@ -49,11 +64,7 @@ jobs:
         if: always()
         run: cat artifacts_python.md
 
-      - name: Generate UML and count classes
+      - name: Main Generate UML and count classes
         run: |
-          pip install pylint graphviz
-          pyreverse -o dot -p project .
-          CLASS_COUNT=$(grep -c 'Class' classes_project.dot)
-          echo "### UML Analysis" >> artifacts_python.md
-          echo "Total classes: $CLASS_COUNT" >> artifacts_python.md
-          echo "Generated UML diagram saved as classes_project.dot"
+          pyreverse -o dot -p ProjectName .
+          dot -Tpng classes_ProjectName.dot -o artifacts_uml.png
