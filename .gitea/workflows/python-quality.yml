@@ -6,6 +6,9 @@ jobs:
   python-quality:
     runs-on: ubuntu-latest
 
+    env:
+      COVERAGE_LEVEL: C1  # C0=命令網羅, C1=分岐網羅, C2=条件網羅
+
     steps:
       # --- 環境確認 ---
       - name: Check environment
@@ -26,7 +29,7 @@ jobs:
           apt-get update -qq
           apt-get install -y python3-pip graphviz
           pip install --upgrade pip
-          pip install pycodestats mypy bandit reuse pytest pytest-cov coverage pylint graphviz
+          pip install pycodestats mypy bandit pytest pytest-cov coverage pylint graphviz pynguin pip-licenses
 
       # --- 静的解析（PEP8, LOC） ---
       - name: Static analysis (PEP8, LOC)
@@ -48,22 +51,37 @@ jobs:
           echo "## 🔒 Security Scan" >> artifacts_python.md
           bandit -r . >> artifacts_python.md 2>&1 || echo "Security scan: issues detected" >> artifacts_python.md
 
-      # --- ライセンス検証 ---
-      - name: License compliance (reuse)
+      # --- 依存ライブラリのライセンス一覧 ---
+      - name: Dependency license scan (pip-licenses)
         run: |
           echo "" >> artifacts_python.md
-          echo "## ⚖️ License Check" >> artifacts_python.md
-          reuse lint >> artifacts_python.md 2>&1 || echo "License issues detected" >> artifacts_python.md
+          echo "## ⚖️ Dependency License Overview" >> artifacts_python.md
+          pip-licenses --from=mixed --format=markdown --with-version --with-urls --order=license >> artifacts_python.md || echo "License scan failed" >> artifacts_python.md
+
+      # --- 自動単体テスト生成 ---
+      - name: Auto-generate unit tests
+        run: |
+          echo "" >> artifacts_python.md
+          echo "## 🤖 Auto-Generated Unit Tests" >> artifacts_python.md
+          mkdir -p generated_tests
+          pynguin --project-path . --output-path ./generated_tests --module-name main || true
+          echo "Generated test files:" >> artifacts_python.md
+          find generated_tests -type f -name "test_*.py" >> artifacts_python.md || echo "No tests generated." >> artifacts_python.md
 
       # --- 単体テスト＋カバレッジ ---
       - name: Unit test & coverage
         run: |
           echo "" >> artifacts_python.md
-          echo "## 🧪 Test & Coverage" >> artifacts_python.md
-          echo "### Test discovery:" >> artifacts_python.md
-          find . -type f -name "test_*.py" -o -name "*_test.py" >> artifacts_python.md || echo "No test files found." >> artifacts_python.md
-          echo "" >> artifacts_python.md
-          pytest --maxfail=1 --disable-warnings --cov=. --cov-report=term-missing -vv >> artifacts_python.md 2>&1 || echo "Tests failed or no coverage data" >> artifacts_python.md
+          echo "## 🧪 Test & Coverage (${COVERAGE_LEVEL})" >> artifacts_python.md
+
+          case "$COVERAGE_LEVEL" in
+            C0) COVERAGE_ARGS="--cov --cov-branch=0" ;;   # 命令網羅
+            C1) COVERAGE_ARGS="--cov --cov-branch" ;;     # 分岐網羅
+            C2) COVERAGE_ARGS="--cov --cov-branch --cov-context=test" ;; # 条件網羅
+            *)  COVERAGE_ARGS="--cov" ;;
+          esac
+
+          pytest generated_tests -vv --disable-warnings $COVERAGE_ARGS >> artifacts_python.md 2>&1 || echo "Tests failed or no coverage data" >> artifacts_python.md
           echo "" >> artifacts_python.md
           coverage report -m >> artifacts_python.md 2>&1 || true
 
@@ -75,7 +93,7 @@ jobs:
       # --- UML生成 ---
       - name: Generate UML (DOT files)
         run: |
-          pyreverse -o dot -p ProjectName $(find . -name "*.py" -not -path "./venv/*" -not -path "./tests/*")
+          pyreverse -o dot -p ProjectName $(find . -name "*.py" -not -path "./venv/*" -not -path "./tests/*" -not -path "./generated_tests/*")
           echo "Generated UML files:"
           find . -name "*.dot"
 
