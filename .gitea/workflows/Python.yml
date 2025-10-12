@@ -1,0 +1,59 @@
+name: Python Quality Pipeline
+
+on: [push]
+
+jobs:
+  python-quality:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        run: |
+          apt-get update -qq
+          apt-get install -y python3-pip
+          pip install --upgrade pip
+          pip install pycodestats mypy bandit reuse pytest pytest-cov
+
+      # --- Layer 1: Core Quality ---
+      - name: Static analysis (PEP8, LOC, complexity)
+        run: |
+          echo "### Code Stats" > artifacts_python.md
+          pycodestats --format markdown --output artifacts_python.md .
+
+      # --- Layer 2: Semantic Quality ---
+      - name: Type checking (mypy)
+        run: |
+          echo "### Type Checking" >> artifacts_python.md
+          mypy . >> artifacts_python.md || true
+
+      - name: Security scanning (bandit)
+        run: |
+          echo "### Security Scan" >> artifacts_python.md
+          bandit -r . >> artifacts_python.md || true
+
+      - name: License compliance (reuse)
+        run: |
+          echo "### License Check" >> artifacts_python.md
+          reuse lint >> artifacts_python.md || true
+
+      # --- Layer 3: Behavioral Quality ---
+      - name: Test & coverage
+        run: |
+          echo "### Test Results" >> artifacts_python.md
+          pytest --maxfail=1 --disable-warnings -q --cov=. >> artifacts_python.md || true
+
+      - name: Display summary
+        if: always()
+        run: cat artifacts_python.md
+
+      - name: Generate UML and count classes
+        run: |
+          pip install pylint graphviz
+          pyreverse -o dot -p project .
+          CLASS_COUNT=$(grep -c 'Class' classes_project.dot)
+          echo "### UML Analysis" >> artifacts_python.md
+          echo "Total classes: $CLASS_COUNT" >> artifacts_python.md
+          echo "Generated UML diagram saved as classes_project.dot"
