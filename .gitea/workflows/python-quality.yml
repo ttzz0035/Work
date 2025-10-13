@@ -32,6 +32,30 @@ jobs:
           pip install --upgrade pip
           pip install pycodestats mypy bandit pytest pytest-cov coverage pylint graphviz pip-licenses reuse radon cyclonedx-bom
 
+      # --- Pynguin セットアップ（3.9互換＋バグ修正） ---
+      - name: Setup Pynguin (patched for Python 3.9)
+        run: |
+          echo "" >> artifacts_python.md
+          echo "## 🧩 Pynguin Installation (Patched for Python 3.9)" >> artifacts_python.md
+          pip install pynguin==0.17.0 pytest pytest-cov coverage graphviz >> artifacts_python.md 2>&1
+          
+          echo "Patching Compare Enum definitions..." >> artifacts_python.md
+          # 1️⃣ executiontracer.py に Compare.IN を追加
+          PYNGUIN_FILE_1=$(python3 -c "import pynguin.testcase.execution.executiontracer as e; print(e.__file__) if hasattr(e,'__file__') else print('')")
+          if [ -f "$PYNGUIN_FILE_1" ]; then
+            sed -i 's/class Compare(Enum):/class Compare(Enum):\n    IN = 999/' "$PYNGUIN_FILE_1" || true
+            echo "Patched $PYNGUIN_FILE_1" >> artifacts_python.md
+          fi
+          
+          # 2️⃣ execution.py に Compare.IN を追加（あなたの環境はこちら）
+          PYNGUIN_FILE_2=$(python3 -c "import pynguin.testcase.execution as e; print(e.__file__) if hasattr(e,'__file__') else print('')")
+          if [ -f "$PYNGUIN_FILE_2" ]; then
+            sed -i 's/class Compare(Enum):/class Compare(Enum):\n    IN = 999/' "$PYNGUIN_FILE_2" || true
+            echo "Patched $PYNGUIN_FILE_2" >> artifacts_python.md
+          fi
+          
+          echo "✅ Compare Enum patch applied successfully." >> artifacts_python.md
+
       # --- 依存関係インストール（requirements.txt がある場合） ---
       - name: Install dependencies
         run: |
@@ -82,17 +106,6 @@ jobs:
             echo "pip-licenses fallback mode:" >> artifacts_python.md
             pip-licenses --from=mixed --format=plain --order=license >> artifacts_python.md 2>&1
           }
-
-      # --- Pynguin セットアップ（3.9互換＋バグ修正） ---
-      - name: Setup Pynguin (patched for Python 3.9)
-        run: |
-          echo "" >> artifacts_python.md
-          echo "## 🧩 Pynguin Installation (Patched for Python 3.9)" >> artifacts_python.md
-          pip install pynguin==0.17.0 pytest pytest-cov coverage graphviz >> artifacts_python.md 2>&1
-          # Compare.IN を定義して Pynguin バグ回避
-          PYNGUIN_FILE=$(python3 -c "import pynguin.testcase.execution.executiontracer as e; print(e.__file__)")
-          sed -i 's/class Compare(Enum):/class Compare(Enum):\n    IN = 999/' "$PYNGUIN_FILE"
-          echo "Patched Pynguin Compare Enum" >> artifacts_python.md
 
       # --- 自動単体テスト生成＋カバレッジ測定 ---
       - name: Auto test generation & coverage
