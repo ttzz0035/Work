@@ -29,7 +29,7 @@ jobs:
           apt-get update -qq
           apt-get install -y python3-pip graphviz licensecheck
           pip install --upgrade pip
-          pip install pycodestats mypy bandit pytest pytest-cov coverage pylint graphviz pynguin pip-licenses reuse radon cyclonedx-bom
+          pip install pycodestats mypy bandit pytest pytest-cov coverage pylint graphviz pip-licenses reuse radon cyclonedx-bom
 
       # --- 依存関係インストール（requirements.txt がある場合） ---
       - name: Install dependencies
@@ -38,7 +38,7 @@ jobs:
             pip install -r requirements.txt
           fi
 
-      # --- 静的コード解析（構文・複雑度） ---
+      # --- 静的コード解析 ---
       - name: Static code metrics
         run: |
           echo "## 🧮 Code Metrics & Complexity" > artifacts_python.md
@@ -71,7 +71,7 @@ jobs:
           echo "### SPDX Validation (reuse lint)" >> artifacts_python.md
           reuse lint >> artifacts_python.md 2>&1 || echo "SPDX lint: issues detected" >> artifacts_python.md
 
-      # --- 依存ライセンス解析（site-packages） ---
+      # --- 依存ライセンス解析 ---
       - name: Dependency license scan (pip-licenses)
         run: |
           echo "" >> artifacts_python.md
@@ -82,25 +82,17 @@ jobs:
             pip-licenses --from=mixed --format=plain --order=license >> artifacts_python.md 2>&1
           }
 
-      # --- 自動単体テスト生成＋カバレッジ ---
-      - name: Setup Pynguin (patched)
-        run: |
-          pip install pynguin==0.18.0 pytest pytest-cov coverage graphviz
-          echo "Pynguin patched version installed"
-
-      - name: Generate tests automatically
-        run: |
-          echo "## 🧩 Auto Test Generation" > artifacts_python.md
-          pynguin --project-path . --output-path generated_tests --coverage C1
-          echo "Generated tests:" >> artifacts_python.md
-          find generated_tests -name "test_*.py" >> artifacts_python.md
-
-      - name: Run generated tests & collect coverage
+      # --- 自動単体テスト生成＋カバレッジ（Python 3.10環境） ---
+      - name: Auto test generation (Pynguin in Python 3.10 container)
         run: |
           echo "" >> artifacts_python.md
-          echo "## 🧪 Test Execution & Coverage" >> artifacts_python.md
-          pytest generated_tests --cov=. --cov-branch -vv >> artifacts_python.md 2>&1 || true
-          coverage report -m >> artifacts_python.md 2>&1 || true
+          echo "## 🧩 Auto Test Generation & Coverage (Pynguin 3.10)" >> artifacts_python.md
+          docker run --rm -v $PWD:/app -w /app python:3.10 bash -c "
+            pip install pynguin pytest pytest-cov coverage graphviz;
+            pynguin --project-path . --output-path generated_tests --coverage C1 || echo 'Pynguin generation failed';
+            pytest generated_tests --cov=. --cov-branch -vv || echo 'pytest execution failed';
+            coverage report -m >> /app/artifacts_python.md;
+          "
 
       # --- 構造図生成（UML） ---
       - name: Generate UML (pyreverse)
