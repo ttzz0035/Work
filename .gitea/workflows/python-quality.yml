@@ -83,15 +83,16 @@ jobs:
             pip-licenses --from=mixed --format=plain --order=license >> artifacts_python.md 2>&1
           }
 
-      # --- 自動単体テスト生成＋カバレッジ測定 ---
+      # --- 自動単体テスト生成＋ミューテーション ---
       - name: Auto test generation & mutation coverage
         run: |
           echo "" >> artifacts_python.md
           echo "## 🧪 Auto Test Generation & Mutation Coverage" >> artifacts_python.md
           mkdir -p generated_tests
 
-          # --- 自動テスト生成（MutPy-Pynguinのpynguin統合CLI） ---
-          pynguin --project-path . \
+          # --- Pynguinをモジュール実行で呼び出す ---
+          python3 -m pynguin \
+                  --project-path . \
                   --output-path generated_tests \
                   --coverage C1 >> artifacts_python.md 2>&1 || echo "Auto test generation failed" >> artifacts_python.md
 
@@ -99,14 +100,18 @@ jobs:
           echo "### Generated tests:" >> artifacts_python.md
           find generated_tests -type f -name "test_*.py" >> artifacts_python.md || echo "No tests generated" >> artifacts_python.md
 
-          # --- 生成テストの実行 ---
+          # --- 生成テスト実行＋カバレッジ測定 ---
           pytest generated_tests --cov=. --cov-branch -vv >> artifacts_python.md 2>&1 || echo "Tests failed" >> artifacts_python.md
           coverage report -m >> artifacts_python.md 2>&1 || true
 
-          # --- ミューテーション分析（MutPy部分） ---
+          # --- MutPyをモジュールとして呼び出す ---
           echo "" >> artifacts_python.md
           echo "### 🧬 Mutation Analysis" >> artifacts_python.md
-          mut.py --target . --unit-test generated_tests --report-html mutation_report --timeout-factor 0.3 >> artifacts_python.md 2>&1 || echo "Mutation analysis failed" >> artifacts_python.md
+          python3 -m mutpy \
+              --target . \
+              --unit-test generated_tests \
+              --report-html mutation_report \
+              --timeout-factor 0.3 >> artifacts_python.md 2>&1 || echo "Mutation analysis failed" >> artifacts_python.md
 
       # --- 成果物アップロード ---
       - name: Upload analysis report
