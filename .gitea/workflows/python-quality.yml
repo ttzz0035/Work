@@ -129,13 +129,10 @@ jobs:
 
           echo "" | tee -a artifacts_python.md
           echo "--- Running Tests ---"
-          # ロギング環境をリセット（前回のlogテスト対策）
-          python3 - <<'PY'
-                      import logging
-                      for h in logging.root.handlers[:]:
-                          logging.root.removeHandler(h)
-                      logging.basicConfig(level=logging.WARNING)
-                      PY
+
+          # ロギング環境をリセット（Pynguin生成テストがlogを汚す対策）
+          python3 -c "import logging; [logging.root.removeHandler(h) for h in logging.root.handlers[:]]; logging.basicConfig(level=logging.WARNING)"
+
           pytest generated_tests --cov=. --cov-branch -vv 2>&1 | tee -a artifacts_python.md || echo "Tests failed" | tee -a artifacts_python.md
           coverage report -m 2>&1 | tee -a artifacts_python.md || true
           
