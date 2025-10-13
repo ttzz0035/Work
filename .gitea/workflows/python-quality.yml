@@ -121,8 +121,23 @@ jobs:
 
           echo "" | tee -a artifacts_python.md
           echo "--- Running Tests ---"
+          export PYTHONPATH=$(pwd)
           pytest generated_tests --cov=. --cov-branch -vv 2>&1 | tee -a artifacts_python.md || echo "Tests failed" | tee -a artifacts_python.md
           coverage report -m 2>&1 | tee -a artifacts_python.md || true
+          
+      # --- UML生成（静的リスト利用／ファイル出力のみ） ---
+      - name: Generate UML (pyreverse)
+        run: |
+          echo "" | tee -a artifacts_python.md
+          echo "## 🧩 UML Structure" | tee -a artifacts_python.md
+
+          # 静的走査で抽出した .py ファイルに限定
+          echo "--- Generating UML .dot files ---" | tee -a artifacts_python.md
+          xargs pyreverse -o dot -p ProjectName < artifacts_filelist.txt || true
+
+          echo "" | tee -a artifacts_python.md
+          echo "Generated .dot files:" | tee -a artifacts_python.md
+          find . -name "*.dot" | tee -a artifacts_python.md
 
       # --- 成果物アップロード ---
       - name: Upload Reports
