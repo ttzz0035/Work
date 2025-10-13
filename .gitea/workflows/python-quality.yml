@@ -83,33 +83,33 @@ jobs:
             pip-licenses --from=mixed --format=plain --order=license | tee -a artifacts_python.md
           }
 
-      # --- 自動テスト生成＋カバレッジ ---
-      - name: Auto Test Generation & Coverage (Pynguin)
-        run: |
-          echo "" | tee -a artifacts_python.md
-          echo "## 🧪 Auto Test Generation & Coverage (Pynguin)" | tee -a artifacts_python.md
-          mkdir -p generated_tests
+    # --- 自動テスト生成＋カバレッジ ---
+    - name: Auto Test Generation & Coverage (Pynguin)
+      run: |
+        echo "" | tee -a artifacts_python.md
+        echo "## 🧪 Auto Test Generation & Coverage (Pynguin)" | tee -a artifacts_python.md
+        mkdir -p generated_tests
 
-          echo "--- Pynguin Execution ---"
-          export PYNGUIN_DANGER_AWARE=1
-          python3 -m pynguin \
-            --project-path . \
-            --output-path generated_tests \
-            --coverage-metrics branch \
-            --create-coverage-report true \
-            --maximum-search-time 30 \
-            --max-length-test-case 20 \
-            --max-initial-tests 10 \
-            --seed 42 2>&1 | tee -a artifacts_python.md || echo "Auto test generation failed" | tee -a artifacts_python.md
+        echo "--- Pynguin Execution ---"
+        export PYNGUIN_DANGER_AWARE=1
+        python3 -m pynguin \
+          --project-path . \
+          --output-path generated_tests \
+          --coverage-metrics predicate \
+          --create-coverage-report true \
+          --maximum-search-time 30 \
+          --max-length-test-case 20 \
+          --max-initial-tests 10 \
+          --seed 42 2>&1 | tee -a artifacts_python.md || echo "Auto test generation failed" | tee -a artifacts_python.md
 
-          echo "" | tee -a artifacts_python.md
-          echo "### Generated Tests:" | tee -a artifacts_python.md
-          find generated_tests -type f -name "test_*.py" | tee -a artifacts_python.md || echo "No tests generated" | tee -a artifacts_python.md
+        echo "" | tee -a artifacts_python.md
+        echo "### Generated Tests:" | tee -a artifacts_python.md
+        find generated_tests -type f -name "test_*.py" | tee -a artifacts_python.md || echo "No tests generated" | tee -a artifacts_python.md
 
-          echo "" | tee -a artifacts_python.md
-          echo "--- Running Tests ---"
-          pytest generated_tests --cov=. --cov-branch -vv 2>&1 | tee -a artifacts_python.md || echo "Tests failed" | tee -a artifacts_python.md
-          coverage report -m 2>&1 | tee -a artifacts_python.md || true
+        echo "" | tee -a artifacts_python.md
+        echo "--- Running Tests ---"
+        pytest generated_tests --cov=. --cov-branch -vv 2>&1 | tee -a artifacts_python.md || echo "Tests failed" | tee -a artifacts_python.md
+        coverage report -m 2>&1 | tee -a artifacts_python.md || true
 
       # --- 成果物アップロード ---
       - name: Upload Reports
