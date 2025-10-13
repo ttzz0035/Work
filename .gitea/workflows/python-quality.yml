@@ -91,6 +91,7 @@ jobs:
           mkdir -p generated_tests
 
           echo "--- Pynguin Execution ---"
+          export PYNGUIN_DANGER_AWARE=1
           python3 -m pynguin \
             --project-path . \
             --output-path generated_tests \
