@@ -33,28 +33,38 @@ jobs:
           pip install pycodestats mypy bandit pytest pytest-cov coverage pylint graphviz pip-licenses reuse radon cyclonedx-bom
 
       # --- Pynguin セットアップ（3.9互換＋バグ修正） ---
-      - name: Setup Pynguin (patched for Python 3.9)
+      - name: Setup Pynguin (pre-patch for Python 3.9)
         run: |
           echo "" >> artifacts_python.md
-          echo "## 🧩 Pynguin Installation (Patched for Python 3.9)" >> artifacts_python.md
+          echo "## 🧩 Pynguin Installation (Pre-Patch for Python 3.9)" >> artifacts_python.md
+
+          # --- 1️⃣ パッケージ展開前に site-packages を特定 ---
+          SITE=$(python3 -c "import site; print(site.getsitepackages()[0])")
+          echo "Site-packages: $SITE" >> artifacts_python.md
+
+          # --- 2️⃣ Compare.IN バグ対策パッチを事前生成 ---
+          mkdir -p "$SITE/pynguin/testcase"
+          TARGET_FILES=(
+            "$SITE/pynguin/testcase/execution.py"
+            "$SITE/pynguin/testcase/executiontracer.py"
+          )
+          for FILE in "${TARGET_FILES[@]}"; do
+            touch "$FILE"
+            echo "# placeholder" > "$FILE"
+          done
+
+          # --- 3️⃣ Pynguin 0.17.0 をインストール ---
           pip install pynguin==0.17.0 pytest pytest-cov coverage graphviz >> artifacts_python.md 2>&1
-          
-          echo "Patching Compare Enum definitions..." >> artifacts_python.md
-          # 1️⃣ executiontracer.py に Compare.IN を追加
-          PYNGUIN_FILE_1=$(python3 -c "import pynguin.testcase.execution.executiontracer as e; print(e.__file__) if hasattr(e,'__file__') else print('')")
-          if [ -f "$PYNGUIN_FILE_1" ]; then
-            sed -i 's/class Compare(Enum):/class Compare(Enum):\n    IN = 999/' "$PYNGUIN_FILE_1" || true
-            echo "Patched $PYNGUIN_FILE_1" >> artifacts_python.md
-          fi
-          
-          # 2️⃣ execution.py に Compare.IN を追加（あなたの環境はこちら）
-          PYNGUIN_FILE_2=$(python3 -c "import pynguin.testcase.execution as e; print(e.__file__) if hasattr(e,'__file__') else print('')")
-          if [ -f "$PYNGUIN_FILE_2" ]; then
-            sed -i 's/class Compare(Enum):/class Compare(Enum):\n    IN = 999/' "$PYNGUIN_FILE_2" || true
-            echo "Patched $PYNGUIN_FILE_2" >> artifacts_python.md
-          fi
-          
-          echo "✅ Compare Enum patch applied successfully." >> artifacts_python.md
+
+          # --- 4️⃣ Compare.Enum に IN を追加 ---
+          for FILE in "${TARGET_FILES[@]}"; do
+            if [ -f "$FILE" ]; then
+              sed -i 's/class Compare(Enum):/class Compare(Enum):\n    IN = 999/' "$FILE" || true
+              echo "Patched $FILE" >> artifacts_python.md
+            fi
+          done
+
+          echo "✅ Compare Enum patched before import" >> artifacts_python.md
 
       # --- 依存関係インストール（requirements.txt がある場合） ---
       - name: Install dependencies
