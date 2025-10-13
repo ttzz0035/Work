@@ -6,9 +6,7 @@ jobs:
   python-quality:
     runs-on: ubuntu-latest
 
-    # Runnerを python:3.10-bullseye ベースにしておくこと
-    # GITEA_RUNNER_LABELS=ubuntu-latest:docker://python:3.10-bullseye
-
+    # Runner例: python:3.10-bullseye
     env:
       COVERAGE_LEVEL: C1  # C0=命令網羅, C1=分岐網羅, C2=条件網羅
 
@@ -19,9 +17,8 @@ jobs:
           echo "=== 🧠 Python Environment Check ==="
           python3 --version
           which python3
-          echo ""
-          echo "=== Working directory ==="
-          pwd && ls -la
+          echo "Working dir: $(pwd)"
+          ls -la
 
       # --- コード取得 ---
       - name: Checkout repository
@@ -40,10 +37,20 @@ jobs:
             pip install -r requirements.txt
           fi
 
+      # --- 静的走査フェーズ（共通ベース） ---
+      - name: Static File Scan
+        run: |
+          echo "## 🔍 Static File Scan" | tee artifacts_python.md
+          find . -type f -name "*.py" \
+            -not -path "./venv/*" \
+            -not -path "./generated_tests/*" > artifacts_filelist.txt
+          cat artifacts_filelist.txt | tee -a artifacts_python.md
+
       # --- 静的コード解析 ---
       - name: Static Code Metrics
         run: |
-          echo "## 🧮 Code Metrics & Complexity" | tee artifacts_python.md
+          echo "" | tee -a artifacts_python.md
+          echo "## 🧮 Code Metrics & Complexity" | tee -a artifacts_python.md
           pycodestats --by-file . | tee -a artifacts_python.md
           echo "" | tee -a artifacts_python.md
           echo "### Cyclomatic Complexity (radon)" | tee -a artifacts_python.md
@@ -63,15 +70,17 @@ jobs:
           echo "## 🔒 Security Analysis" | tee -a artifacts_python.md
           bandit -r . | tee -a artifacts_python.md || echo "Security issues found" | tee -a artifacts_python.md
 
-      # --- 自作コードライセンス解析 ---
+      # --- 自作コードライセンス解析（静的リスト使用） ---
       - name: Source License Scan
         run: |
           echo "" | tee -a artifacts_python.md
           echo "## ⚖️ Source License (Repository Files)" | tee -a artifacts_python.md
-          licensecheck --recursive --ignore ".git" . | tee -a artifacts_python.md || echo "License header issues detected" | tee -a artifacts_python.md
+          while read f; do
+            licensecheck "$f" >> artifacts_python.md 2>&1 || true
+          done < artifacts_filelist.txt
           echo "" | tee -a artifacts_python.md
           echo "### SPDX Validation (reuse lint)" | tee -a artifacts_python.md
-          reuse lint | tee -a artifacts_python.md || echo "SPDX lint: issues detected" | tee -a artifacts_python.md
+          reuse lint | tee -a artifacts_python.md || echo "SPDX lint issues detected" | tee -a artifacts_python.md
 
       # --- 依存ライセンス解析 ---
       - name: Dependency License Scan
@@ -83,24 +92,28 @@ jobs:
             pip-licenses --from=mixed --format=plain --order=license | tee -a artifacts_python.md
           }
 
-      # --- 自動テスト生成＋カバレッジ ---
+      # --- 自動テスト生成＋カバレッジ（静的走査結果利用） ---
       - name: Auto Test Generation & Coverage (Pynguin)
         run: |
           echo "" | tee -a artifacts_python.md
           echo "## 🧪 Auto Test Generation & Coverage (Pynguin)" | tee -a artifacts_python.md
           mkdir -p generated_tests
-
-          echo "--- Pynguin Execution ---"
           export PYNGUIN_DANGER_AWARE=1
-          python3 -m pynguin \
-            --project-path . \
-            --output-path generated_tests \
-            --coverage-metrics BRANCH \
-            --create-coverage-report true \
-            --maximum-search-time 30 \
-            --max-length-test-case 20 \
-            --max-initial-tests 10 \
-            --seed 42 2>&1 | tee -a artifacts_python.md || echo "Auto test generation failed" | tee -a artifacts_python.md
+
+          while read f; do
+            mod=$(echo "$f" | sed 's|^./||; s|/|.|g; s|.py$||')
+            echo "--- Generating tests for: $mod ---" | tee -a artifacts_python.md
+            python3 -m pynguin \
+              --project-path . \
+              --module-name "$mod" \
+              --output-path generated_tests \
+              --coverage-metrics BRANCH \
+              --create-coverage-report true \
+              --maximum-search-time 20 \
+              --max-length-test-case 20 \
+              --max-initial-tests 10 \
+              --seed 42 >> artifacts_python.md 2>&1 || echo "Failed: $mod" | tee -a artifacts_python.md
+          done < artifacts_filelist.txt
 
           echo "" | tee -a artifacts_python.md
           echo "### Generated Tests:" | tee -a artifacts_python.md
