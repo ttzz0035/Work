@@ -72,7 +72,7 @@ jobs:
           reuse lint >> artifacts_python.md 2>&1 || echo "SPDX lint: issues detected" >> artifacts_python.md
 
       # --- 依存ライセンス解析（site-packages） ---
-      - name: Dependency license scan (pip-licenses)
+      - name: Dependency license scan (pip-licenses + SBOM)
         run: |
           echo "" >> artifacts_python.md
           echo "## ⚖️ Dependency Licenses (External Packages)" >> artifacts_python.md
@@ -81,9 +81,10 @@ jobs:
             echo "pip-licenses fallback mode:" >> artifacts_python.md
             pip-licenses --from=mixed --format=plain --order=license >> artifacts_python.md 2>&1
           }
+
           echo "" >> artifacts_python.md
-          echo "### CycloneDX SBOM (Summary)" >> artifacts_python.md
-          cyclonedx-py --format json -o sbom.json
+          echo "### CycloneDX SBOM (Environment)" >> artifacts_python.md
+          cyclonedx-py environment -o sbom.json --format json
           jq '.components | map({name,version,licenses})' sbom.json >> artifacts_python.md 2>/dev/null || echo "SBOM summary unavailable" >> artifacts_python.md
 
       # --- 自動単体テスト生成＋カバレッジ ---
