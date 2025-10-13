@@ -83,23 +83,22 @@ jobs:
           }
 
       # --- 自動単体テスト生成＋カバレッジ ---
-      - name: Auto-generate & run tests
+      - name: Setup testing stack
+        run: |
+          pip install pytest pytest-cov hypothesis mutmut
+
+      - name: Auto-generate tests (Hypothesis)
+        run: |
+          echo "## 🧪 Auto Property-based Tests" >> artifacts_python.md
+          pytest --maxfail=1 --disable-warnings -q --hypothesis-show-statistics >> artifacts_python.md 2>&1 || true
+
+      - name: Coverage & Mutation
         run: |
           echo "" >> artifacts_python.md
-          echo "## 🧪 Auto-Generated Tests & Coverage (${COVERAGE_LEVEL})" >> artifacts_python.md
-          mkdir -p generated_tests
-          pynguin --project-path . --output-path ./generated_tests --module-name main || true
-
-          case "$COVERAGE_LEVEL" in
-            C0) COVERAGE_ARGS="--cov --cov-branch=0" ;;
-            C1) COVERAGE_ARGS="--cov --cov-branch" ;;
-            C2) COVERAGE_ARGS="--cov --cov-branch --cov-context=test" ;;
-            *)  COVERAGE_ARGS="--cov" ;;
-          esac
-
-          pytest generated_tests -vv --disable-warnings $COVERAGE_ARGS >> artifacts_python.md 2>&1 || echo "Tests failed or incomplete coverage" >> artifacts_python.md
-          echo "" >> artifacts_python.md
-          coverage report -m >> artifacts_python.md 2>&1 || true
+          echo "## 🧬 Coverage & Mutation Testing" >> artifacts_python.md
+          pytest --cov=. --cov-branch -q >> artifacts_python.md 2>&1
+          mutmut run --use-coverage >> artifacts_python.md 2>&1
+          mutmut results >> artifacts_python.md 2>&1 || true
 
       # --- 構造図生成（UML） ---
       - name: Generate UML (pyreverse)
@@ -123,9 +122,3 @@ jobs:
           path: |
             **/classes_ProjectName.dot
             **/packages_ProjectName.dot
-
-      - name: Upload SBOM (JSON)
-        uses: actions/upload-artifact@v3
-        with:
-          name: sbom-cyclonedx
-          path: sbom.json
