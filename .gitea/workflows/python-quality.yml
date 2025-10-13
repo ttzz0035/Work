@@ -56,7 +56,11 @@ jobs:
         run: |
           echo "" >> artifacts_python.md
           echo "## ⚖️ Dependency License Overview" >> artifacts_python.md
-          pip-licenses --from=mixed --format=markdown --with-version --with-urls --order=license >> artifacts_python.md || echo "License scan failed" >> artifacts_python.md
+          pip install --upgrade pip-licenses >/dev/null 2>&1
+          pip-licenses --from=mixed --format=markdown --order=license >> artifacts_python.md 2>&1 || {
+            echo "pip-licenses basic fallback mode..." >> artifacts_python.md
+            pip-licenses --from=mixed --format=plain --order=license >> artifacts_python.md 2>&1 || echo "License scan failed" >> artifacts_python.md
+          }
 
       # --- 自動単体テスト生成 ---
       - name: Auto-generate unit tests
