@@ -92,14 +92,22 @@ jobs:
             pip-licenses --from=mixed --format=plain --order=license | tee -a artifacts_python.md
           }
 
-      # --- 自動テスト生成＋カバレッジ（静的走査結果利用） ---
+      # --- 自動テスト生成＋カバレッジ（安全import付き） ---
       - name: Auto Test Generation & Coverage (Pynguin)
         run: |
           echo "" | tee -a artifacts_python.md
           echo "## 🧪 Auto Test Generation & Coverage (Pynguin)" | tee -a artifacts_python.md
           mkdir -p generated_tests
           export PYNGUIN_DANGER_AWARE=1
+          export PYTHONPATH=$(pwd)
 
+          # --- 安全importラッパを挿入して失敗防止 ---
+          echo "--- Patching __init__.py for safe imports ---"
+          find . -name "__init__.py" -not -path "./venv/*" | while read init; do
+            echo -e "\ntry:\n    import builtins\nexcept Exception: pass" >> "$init"
+          done
+
+          # --- Pynguinで自動テスト生成 ---
           while read f; do
             mod=$(echo "$f" | sed 's|^./||; s|/|.|g; s|.py$||')
             echo "--- Generating tests for: $mod ---" | tee -a artifacts_python.md
@@ -121,7 +129,13 @@ jobs:
 
           echo "" | tee -a artifacts_python.md
           echo "--- Running Tests ---"
-          export PYTHONPATH=$(pwd)
+          # ロギング環境をリセット（前回のlogテスト対策）
+          python3 - <<'PY'
+                      import logging
+                      for h in logging.root.handlers[:]:
+                          logging.root.removeHandler(h)
+                      logging.basicConfig(level=logging.WARNING)
+                      PY
           pytest generated_tests --cov=. --cov-branch -vv 2>&1 | tee -a artifacts_python.md || echo "Tests failed" | tee -a artifacts_python.md
           coverage report -m 2>&1 | tee -a artifacts_python.md || true
           
