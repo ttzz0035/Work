@@ -84,42 +84,29 @@ jobs:
           }
 
       # --- 自動単体テスト生成＋カバレッジ測定 ---
-      - name: Setup MutPy-Pynguin
-        run: |
-          echo "" >> artifacts_python.md
-          echo "## 🧩 MutPy-Pynguin Setup" >> artifacts_python.md
-          pip install MutPy-Pynguin pytest pytest-cov coverage graphviz >> artifacts_python.md 2>&1
-
       - name: Auto test generation & mutation coverage
         run: |
           echo "" >> artifacts_python.md
           echo "## 🧪 Auto Test Generation & Mutation Coverage" >> artifacts_python.md
           mkdir -p generated_tests
 
-          # --- 自動テスト生成 ---
-          mutpynguin --project-path . \
-                     --output-path generated_tests \
-                     --coverage C1 >> artifacts_python.md 2>&1 || echo "Auto test generation failed" >> artifacts_python.md
+          # --- 自動テスト生成（MutPy-Pynguinのpynguin統合CLI） ---
+          pynguin --project-path . \
+                  --output-path generated_tests \
+                  --coverage C1 >> artifacts_python.md 2>&1 || echo "Auto test generation failed" >> artifacts_python.md
 
           echo "" >> artifacts_python.md
           echo "### Generated tests:" >> artifacts_python.md
           find generated_tests -type f -name "test_*.py" >> artifacts_python.md || echo "No tests generated" >> artifacts_python.md
 
-          # --- テスト実行とミューテーション分析 ---
+          # --- 生成テストの実行 ---
           pytest generated_tests --cov=. --cov-branch -vv >> artifacts_python.md 2>&1 || echo "Tests failed" >> artifacts_python.md
           coverage report -m >> artifacts_python.md 2>&1 || true
 
+          # --- ミューテーション分析（MutPy部分） ---
           echo "" >> artifacts_python.md
-          echo "### Mutation Analysis (MutPy)" >> artifacts_python.md
-          mut.py --target . --unit-test generated_tests --report-html mutation_report || echo "Mutation analysis failed" >> artifacts_python.md
-
-      # --- 構造図生成（UML） ---
-      - name: Generate UML (pyreverse)
-        run: |
-          echo "" >> artifacts_python.md
-          echo "## 🧩 UML Structure" >> artifacts_python.md
-          pyreverse -o dot -p ProjectName $(find . -name "*.py" -not -path "./venv/*" -not -path "./generated_tests/*") || true
-          find . -name "*.dot" >> artifacts_python.md
+          echo "### 🧬 Mutation Analysis" >> artifacts_python.md
+          mut.py --target . --unit-test generated_tests --report-html mutation_report --timeout-factor 0.3 >> artifacts_python.md 2>&1 || echo "Mutation analysis failed" >> artifacts_python.md
 
       # --- 成果物アップロード ---
       - name: Upload analysis report
