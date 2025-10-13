@@ -95,7 +95,7 @@ jobs:
           python3 -m pynguin \
             --project-path . \
             --output-path generated_tests \
-            --coverage-metrics predicate \
+            --coverage-metrics BRANCH \
             --create-coverage-report true \
             --maximum-search-time 30 \
             --max-length-test-case 20 \
