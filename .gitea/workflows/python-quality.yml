@@ -1,4 +1,4 @@
-name: Python Quality Pipeline
+name: Python Quality Intelligence Pipeline
 
 on: [push]
 
@@ -23,89 +23,101 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # --- 環境構築 ---
+      # --- Python環境構築 ---
       - name: System setup
         run: |
           apt-get update -qq
-          apt-get install -y python3-pip graphviz
+          apt-get install -y python3-pip graphviz licensecheck
           pip install --upgrade pip
-          pip install pycodestats mypy bandit pytest pytest-cov coverage pylint graphviz pynguin pip-licenses
+          pip install pycodestats mypy bandit pytest pytest-cov coverage pylint graphviz pynguin pip-licenses reuse radon cyclonedx-bom
 
-      # --- 静的解析（PEP8, LOC） ---
-      - name: Static analysis (PEP8, LOC)
+      # --- 依存関係インストール（requirements.txt がある場合） ---
+      - name: Install dependencies
         run: |
-          echo "## 🧮 Python Code Metrics" > artifacts_python.md
-          pycodestats --by-file . >> artifacts_python.md
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
 
-      # --- 型チェック ---
+      # --- 静的コード解析（構文・複雑度） ---
+      - name: Static code metrics
+        run: |
+          echo "## 🧮 Code Metrics & Complexity" > artifacts_python.md
+          pycodestats --by-file . >> artifacts_python.md
+          echo "" >> artifacts_python.md
+          echo "### Cyclomatic Complexity (radon)" >> artifacts_python.md
+          radon cc . -s -a >> artifacts_python.md 2>&1
+
+      # --- 型解析 ---
       - name: Type checking (mypy)
         run: |
           echo "" >> artifacts_python.md
           echo "## 🧩 Type Checking" >> artifacts_python.md
-          mypy . >> artifacts_python.md 2>&1 || echo "Type check: failed or warnings" >> artifacts_python.md
+          mypy . >> artifacts_python.md 2>&1 || echo "Type check: warnings or failures" >> artifacts_python.md
 
-      # --- セキュリティスキャン ---
-      - name: Security scan (bandit)
+      # --- セキュリティ解析 ---
+      - name: Security analysis (bandit)
         run: |
           echo "" >> artifacts_python.md
-          echo "## 🔒 Security Scan" >> artifacts_python.md
-          bandit -r . >> artifacts_python.md 2>&1 || echo "Security scan: issues detected" >> artifacts_python.md
+          echo "## 🔒 Security Analysis" >> artifacts_python.md
+          bandit -r . >> artifacts_python.md 2>&1 || echo "Security issues found" >> artifacts_python.md
 
-      # --- 依存ライブラリのライセンス一覧 ---
+      # --- 自作コードライセンス解析 ---
+      - name: In-repo license scan
+        run: |
+          echo "" >> artifacts_python.md
+          echo "## ⚖️ Source License (Repository Files)" >> artifacts_python.md
+          licensecheck --recursive --ignore ".git" . >> artifacts_python.md 2>&1 || echo "License header issues detected" >> artifacts_python.md
+          echo "" >> artifacts_python.md
+          echo "### SPDX Validation (reuse lint)" >> artifacts_python.md
+          reuse lint >> artifacts_python.md 2>&1 || echo "SPDX lint: issues detected" >> artifacts_python.md
+
+      # --- 依存ライセンス解析（site-packages） ---
       - name: Dependency license scan (pip-licenses)
         run: |
           echo "" >> artifacts_python.md
-          echo "## ⚖️ Dependency License Overview" >> artifacts_python.md
+          echo "## ⚖️ Dependency Licenses (External Packages)" >> artifacts_python.md
           pip install --upgrade pip-licenses >/dev/null 2>&1
           pip-licenses --from=mixed --format=markdown --order=license >> artifacts_python.md 2>&1 || {
-            echo "pip-licenses basic fallback mode..." >> artifacts_python.md
-            pip-licenses --from=mixed --format=plain --order=license >> artifacts_python.md 2>&1 || echo "License scan failed" >> artifacts_python.md
+            echo "pip-licenses fallback mode:" >> artifacts_python.md
+            pip-licenses --from=mixed --format=plain --order=license >> artifacts_python.md 2>&1
           }
+          echo "" >> artifacts_python.md
+          echo "### CycloneDX SBOM (Summary)" >> artifacts_python.md
+          cyclonedx-py --format json -o sbom.json
+          jq '.components | map({name,version,licenses})' sbom.json >> artifacts_python.md 2>/dev/null || echo "SBOM summary unavailable" >> artifacts_python.md
 
-      # --- 自動単体テスト生成 ---
-      - name: Auto-generate unit tests
+      # --- 自動単体テスト生成＋カバレッジ ---
+      - name: Auto-generate & run tests
         run: |
           echo "" >> artifacts_python.md
-          echo "## 🤖 Auto-Generated Unit Tests" >> artifacts_python.md
+          echo "## 🧪 Auto-Generated Tests & Coverage (${COVERAGE_LEVEL})" >> artifacts_python.md
           mkdir -p generated_tests
           pynguin --project-path . --output-path ./generated_tests --module-name main || true
-          echo "Generated test files:" >> artifacts_python.md
-          find generated_tests -type f -name "test_*.py" >> artifacts_python.md || echo "No tests generated." >> artifacts_python.md
-
-      # --- 単体テスト＋カバレッジ ---
-      - name: Unit test & coverage
-        run: |
-          echo "" >> artifacts_python.md
-          echo "## 🧪 Test & Coverage (${COVERAGE_LEVEL})" >> artifacts_python.md
 
           case "$COVERAGE_LEVEL" in
-            C0) COVERAGE_ARGS="--cov --cov-branch=0" ;;   # 命令網羅
-            C1) COVERAGE_ARGS="--cov --cov-branch" ;;     # 分岐網羅
-            C2) COVERAGE_ARGS="--cov --cov-branch --cov-context=test" ;; # 条件網羅
+            C0) COVERAGE_ARGS="--cov --cov-branch=0" ;;
+            C1) COVERAGE_ARGS="--cov --cov-branch" ;;
+            C2) COVERAGE_ARGS="--cov --cov-branch --cov-context=test" ;;
             *)  COVERAGE_ARGS="--cov" ;;
           esac
 
-          pytest generated_tests -vv --disable-warnings $COVERAGE_ARGS >> artifacts_python.md 2>&1 || echo "Tests failed or no coverage data" >> artifacts_python.md
+          pytest generated_tests -vv --disable-warnings $COVERAGE_ARGS >> artifacts_python.md 2>&1 || echo "Tests failed or incomplete coverage" >> artifacts_python.md
           echo "" >> artifacts_python.md
           coverage report -m >> artifacts_python.md 2>&1 || true
 
-      # --- 結果表示 ---
-      - name: Display summary
-        if: always()
-        run: cat artifacts_python.md
-
-      # --- UML生成 ---
-      - name: Generate UML (DOT files)
+      # --- 構造図生成（UML） ---
+      - name: Generate UML (pyreverse)
         run: |
-          pyreverse -o dot -p ProjectName $(find . -name "*.py" -not -path "./venv/*" -not -path "./tests/*" -not -path "./generated_tests/*")
-          echo "Generated UML files:"
-          find . -name "*.dot"
+          echo "" >> artifacts_python.md
+          echo "## 🧩 UML Structure" >> artifacts_python.md
+          pyreverse -o dot -p ProjectName $(find . -name "*.py" -not -path "./venv/*" -not -path "./generated_tests/*") || true
+          find . -name "*.dot" >> artifacts_python.md
 
       # --- 成果物アップロード ---
-      - name: Upload Python Quality Report
+      - name: Upload analysis report
         uses: actions/upload-artifact@v3
         with:
-          name: python-quality-report
+          name: python-quality-intel
           path: artifacts_python.md
 
       - name: Upload UML artifacts
@@ -115,3 +127,9 @@ jobs:
           path: |
             **/classes_ProjectName.dot
             **/packages_ProjectName.dot
+
+      - name: Upload SBOM (JSON)
+        uses: actions/upload-artifact@v3
+        with:
+          name: sbom-cyclonedx
+          path: sbom.json
