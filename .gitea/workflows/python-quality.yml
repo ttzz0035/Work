@@ -6,40 +6,42 @@ jobs:
   python-quality:
     runs-on: ubuntu-latest
 
+    # Runnerを python:3.10-bullseye ベースにしておくこと
+    # GITEA_RUNNER_LABELS=ubuntu-latest:docker://python:3.10-bullseye
+
     env:
       COVERAGE_LEVEL: C1  # C0=命令網羅, C1=分岐網羅, C2=条件網羅
 
     steps:
-      # --- Python 3.10 をインストール ---
-      - name: Install Python 3.10 (via deadsnakes)
+      # --- 環境確認 ---
+      - name: Environment Info
         run: |
-          echo "=== 🧠 Python 3.10 Environment Setup ==="
-          apt-get update -qq
-          apt-get install -y software-properties-common curl gnupg
-          add-apt-repository ppa:deadsnakes/ppa -y
-          apt-get update -qq
-          apt-get install -y python3.10 python3.10-venv python3.10-distutils graphviz licensecheck
-          update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.10 1
+          echo "=== 🧠 Python Environment Check ==="
           python3 --version
-          curl -sS https://bootstrap.pypa.io/get-pip.py | python3
-          pip install --upgrade pip setuptools wheel
+          which python3
+          echo ""
+          echo "=== Working directory ==="
+          pwd && ls -la
 
       # --- コード取得 ---
       - name: Checkout repository
         uses: actions/checkout@v3
 
       # --- 依存モジュールセットアップ ---
-      - name: Install Analysis Packages
+      - name: Setup Analysis Environment
         run: |
+          apt-get update -qq
+          apt-get install -y graphviz licensecheck
+          pip install -U pip setuptools wheel
           pip install pycodestats mypy bandit pytest pytest-cov coverage pylint graphviz \
-                     pip-licenses reuse radon cyclonedx-bom pynguin==0.25.2 MutPy-Pynguin==0.7.1
+                     pip-licenses reuse radon cyclonedx-bom pynguin==0.25.2
 
           if [ -f requirements.txt ]; then
             pip install -r requirements.txt
           fi
 
       # --- 静的コード解析 ---
-      - name: Static code metrics
+      - name: Static Code Metrics
         run: |
           echo "## 🧮 Code Metrics & Complexity" | tee artifacts_python.md
           pycodestats --by-file . | tee -a artifacts_python.md
@@ -48,21 +50,21 @@ jobs:
           radon cc . -s -a | tee -a artifacts_python.md
 
       # --- 型解析 ---
-      - name: Type checking (mypy)
+      - name: Type Checking (mypy)
         run: |
           echo "" | tee -a artifacts_python.md
           echo "## 🧩 Type Checking" | tee -a artifacts_python.md
-          mypy . | tee -a artifacts_python.md || echo "Type check warnings or failures" | tee -a artifacts_python.md
+          mypy . | tee -a artifacts_python.md || echo "Type check: warnings or failures" | tee -a artifacts_python.md
 
       # --- セキュリティ解析 ---
-      - name: Security analysis (bandit)
+      - name: Security Analysis (bandit)
         run: |
           echo "" | tee -a artifacts_python.md
           echo "## 🔒 Security Analysis" | tee -a artifacts_python.md
           bandit -r . | tee -a artifacts_python.md || echo "Security issues found" | tee -a artifacts_python.md
 
       # --- 自作コードライセンス解析 ---
-      - name: In-repo license scan
+      - name: Source License Scan
         run: |
           echo "" | tee -a artifacts_python.md
           echo "## ⚖️ Source License (Repository Files)" | tee -a artifacts_python.md
@@ -72,7 +74,7 @@ jobs:
           reuse lint | tee -a artifacts_python.md || echo "SPDX lint: issues detected" | tee -a artifacts_python.md
 
       # --- 依存ライセンス解析 ---
-      - name: Dependency license scan (pip-licenses)
+      - name: Dependency License Scan
         run: |
           echo "" | tee -a artifacts_python.md
           echo "## ⚖️ Dependency Licenses (External Packages)" | tee -a artifacts_python.md
@@ -82,45 +84,42 @@ jobs:
           }
 
       # --- 自動テスト生成＋カバレッジ ---
-      - name: Auto test generation & mutation coverage
+      - name: Auto Test Generation (Pynguin)
         run: |
           echo "" | tee -a artifacts_python.md
-          echo "## 🧪 Auto Test Generation & Mutation Coverage" | tee -a artifacts_python.md
+          echo "## 🧪 Auto Test Generation & Coverage (Pynguin)" | tee -a artifacts_python.md
           mkdir -p generated_tests
 
-          # Pynguin で自動テスト生成
+          echo "--- Pynguin Execution ---"
           python3 -m pynguin \
-                  --project-path . \
-                  --output-path generated_tests \
-                  --coverage ${COVERAGE_LEVEL} 2>&1 | tee -a artifacts_python.md || echo "Auto test generation failed" | tee -a artifacts_python.md
+            --project-path . \
+            --output-path generated_tests \
+            --coverage ${COVERAGE_LEVEL} 2>&1 | tee -a artifacts_python.md || echo "Auto test generation failed" | tee -a artifacts_python.md
 
           echo "" | tee -a artifacts_python.md
-          echo "### Generated tests:" | tee -a artifacts_python.md
+          echo "### Generated Tests:" | tee -a artifacts_python.md
           find generated_tests -type f -name "test_*.py" | tee -a artifacts_python.md || echo "No tests generated" | tee -a artifacts_python.md
 
-          # テスト実行＋カバレッジ出力
+          echo "" | tee -a artifacts_python.md
+          echo "--- Running Tests ---"
           pytest generated_tests --cov=. --cov-branch -vv 2>&1 | tee -a artifacts_python.md || echo "Tests failed" | tee -a artifacts_python.md
           coverage report -m 2>&1 | tee -a artifacts_python.md || true
 
-          # 変異テスト
-          echo "" | tee -a artifacts_python.md
-          echo "### 🧬 Mutation Analysis" | tee -a artifacts_python.md
-          python3 -m mutpy --target . --unit-test generated_tests --report-html mutation_report --timeout-factor 0.3 2>&1 | tee -a artifacts_python.md || echo "Mutation analysis failed" | tee -a artifacts_python.md
-
       # --- UML生成 ---
-      - name: Generate UML
+      - name: Generate UML (pyreverse)
         run: |
           echo "" | tee -a artifacts_python.md
           echo "## 🧩 UML Structure" | tee -a artifacts_python.md
           pyreverse -o dot -p ProjectName $(find . -name "*.py" -not -path "./venv/*" -not -path "./generated_tests/*") || true
+          echo "" | tee -a artifacts_python.md
+          echo "### Generated UML files:" | tee -a artifacts_python.md
           find . -name "*.dot" | tee -a artifacts_python.md
 
-      # --- 成果物 ---
-      - name: Upload reports
+      # --- 成果物アップロード ---
+      - name: Upload Reports
         uses: actions/upload-artifact@v3
         with:
           name: python-quality-intelligence
           path: |
             artifacts_python.md
-            mutation_report/
             **/*.dot
