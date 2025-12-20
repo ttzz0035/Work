@@ -81,6 +81,7 @@ class DiffThread(QThread):
                 }
             )
         except Exception as e:
+            logger.exception("DiffThread failed: %s", e)
             self.finished_ng.emit(str(e))
 
 
@@ -90,13 +91,15 @@ class DiffThread(QThread):
 class LauncherTreeView(QTreeView):
     """
     Tree:
-      group(folder)
+      group(folder)  ※仮想グループ（OSパスとは無関係）
         └─ file (Excel)
              └─ sheet
 
     - Excel 切替・Sheet 切替
-    - キー操作（Alt↑↓ / Ctrl↑↓ / Enter）
+    - キー操作（Enter）
     - Macro 録画（意味コマンド）
+    - グループ追加/フォルダ読込：グループ名入力（空ならフォルダ名）
+    - DnD/リネームはUIのみ（OS移動しない）
     """
 
     # -------------------------------------------------
@@ -107,12 +110,19 @@ class LauncherTreeView(QTreeView):
 
         # --- model ---
         self._model = QStandardItemModel()
-        self._model.setHorizontalHeaderLabels(["Workspace"])
+        self._model.setHorizontalHeaderLabels([""])
         self.setModel(self._model)
+        self.header().hide()
 
         self.setSelectionMode(QTreeView.ExtendedSelection)
         self.setSelectionBehavior(QTreeView.SelectRows)
-        self.setEditTriggers(QTreeView.NoEditTriggers)
+
+        # 編集：F2/選択クリック（sheetだけ禁止にするのは item 側で制御）
+        self.setEditTriggers(
+            QTreeView.EditKeyPressed |
+            QTreeView.SelectedClicked
+        )
+
         self.setUniformRowHeights(True)
         self.setAnimated(True)
 
@@ -233,6 +243,11 @@ class LauncherTreeView(QTreeView):
             self._set_single_selection(idx)
 
         menu = QMenu(self)
+
+        # ★ グループ追加
+        menu.addAction("Add Group...", self.add_group_dialog)
+
+        menu.addSeparator()
         menu.addAction("Add Files...", self.add_files_dialog)
         menu.addAction("Add Folder...", self.add_folder_dialog)
 
@@ -255,6 +270,35 @@ class LauncherTreeView(QTreeView):
         menu.exec(self.viewport().mapToGlobal(pos))
 
     # =================================================
+    # Group (Virtual)
+    # =================================================
+    def add_group_dialog(self):
+        name, ok = QInputDialog.getText(
+            self,
+            "Add Group",
+            "Group name:",
+            text="New Group",
+        )
+        if not ok:
+            logger.info("[GROUP] add canceled")
+            return
+
+        group_name = (name or "").strip()
+        if not group_name:
+            logger.info("[GROUP] add empty -> ignored")
+            return
+
+        it = self._create_item(group_name, NodeTag("folder", ""))
+        self._model.appendRow(it)
+        self.expand(it.index())
+
+        logger.info("[GROUP] added: %s", group_name)
+        try:
+            self._macro.record("add_group", name=group_name)
+        except Exception:
+            pass
+
+    # =================================================
     # Macro UI
     # =================================================
     def macro_start_dialog(self):
@@ -262,24 +306,32 @@ class LauncherTreeView(QTreeView):
         if ok:
             self._macro.start(name=name or "macro")
             QMessageBox.information(self, "Macro", "録画開始")
+            logger.info("[MACRO] start name=%s", name or "macro")
 
     def macro_stop(self):
         self._macro.stop()
         QMessageBox.information(
             self, "Macro", f"録画停止（{self._macro.steps_count()} steps）"
         )
+        logger.info("[MACRO] stop steps=%s", self._macro.steps_count())
 
     def macro_clear(self):
         self._macro.clear()
         QMessageBox.information(self, "Macro", "コマンドをクリアしました")
+        logger.info("[MACRO] cleared")
 
     def macro_save_dialog(self):
         path, _ = QFileDialog.getSaveFileName(
             self, "Save Macro", "", "Macro JSON (*.json)"
         )
         if path:
-            self._macro.save_json(path)
-            QMessageBox.information(self, "Macro", f"保存しました:\n{path}")
+            try:
+                self._macro.save_json(path)
+                QMessageBox.information(self, "Macro", f"保存しました:\n{path}")
+                logger.info("[MACRO] saved: %s", path)
+            except Exception as e:
+                logger.exception("Macro save failed: %s", e)
+                QMessageBox.critical(self, "Macro", f"保存に失敗しました:\n{e}")
 
     # =================================================
     # Selection handling
@@ -299,9 +351,11 @@ class LauncherTreeView(QTreeView):
                 self._engine_exec("list_sheets", path=tag.path)
 
         elif tag.kind == "sheet":
-            self._engine_exec(
-                "activate_sheet", path=tag.path, sheet=tag.sheet
-            )
+            self._engine_exec("activate_sheet", path=tag.path, sheet=tag.sheet)
+
+        else:
+            # folder/group 選択は Excel 操作しない
+            pass
 
     def _on_selection_changed(self, *_):
         self._execute_current_selection()
@@ -311,7 +365,7 @@ class LauncherTreeView(QTreeView):
         if not item:
             return
 
-        # clear
+        # clear sheet children
         for r in reversed(range(item.rowCount())):
             ch = item.child(r)
             tag = ch.data(ROLE_TAG)
@@ -322,12 +376,13 @@ class LauncherTreeView(QTreeView):
             item.appendRow(self._create_item(s, NodeTag("sheet", path, s)))
 
         self.expand(item.index())
+        logger.info("[SHEETS] ready path=%s count=%s", path, len(sheets))
 
     # =================================================
     # Diff
     # =================================================
     def _get_selected_sheet_tags(self) -> List[NodeTag]:
-        out = []
+        out: List[NodeTag] = []
         for idx in self._selected_primary_indexes():
             tag = idx.data(ROLE_TAG)
             if isinstance(tag, NodeTag) and tag.kind == "sheet":
@@ -362,20 +417,22 @@ class LauncherTreeView(QTreeView):
         self._diff_thread.finished_ng.connect(self._on_diff_ng)
         self._diff_thread.start()
 
+        logger.info("[DIFF] start a=%s/%s b=%s/%s", a.path, a.sheet, b.path, b.sheet)
+
     def _on_diff_ok(self, payload: dict):
         if self._diff_dialog is None:
             from ui.diff_dialog import DiffDialog
             self._diff_dialog = DiffDialog(self)
-        self._diff_dialog.set_results(
-            payload.get("items", []), payload.get("meta", {})
-        )
+        self._diff_dialog.set_results(payload.get("items", []), payload.get("meta", {}))
         self._diff_dialog.exec()
+        logger.info("[DIFF] ok items=%s", len(payload.get("items", []) or []))
 
     def _on_diff_ng(self, msg: str):
+        logger.error("[DIFF] ng: %s", msg)
         QMessageBox.critical(self, "Diff", msg)
 
     # =================================================
-    # Add / Remove
+    # Add (Files / Folder)
     # =================================================
     def add_files_dialog(self):
         files, _ = QFileDialog.getOpenFileNames(
@@ -386,25 +443,55 @@ class LauncherTreeView(QTreeView):
 
     def add_folder_dialog(self):
         folder = QFileDialog.getExistingDirectory(self, "Add Folder")
-        if folder:
-            self._add_folder(folder)
+        if not folder:
+            return
+
+        default_name = os.path.basename(folder)
+        name, ok = QInputDialog.getText(
+            self,
+            "Group Name",
+            "Group name:",
+            text=default_name,
+        )
+
+        # 入力なければフォルダ名
+        group_name = (name or "").strip() if ok else ""
+        if not group_name:
+            group_name = default_name
+
+        logger.info("[FOLDER] selected=%s group_name=%s", folder, group_name)
+        self._add_folder(folder, group_name)
 
     def _add_file(self, path: str, parent: Optional[QStandardItem] = None):
         if not _is_openable_excel_path(path):
             return
+
         ap = _abspath(path)
         it = self._create_item(os.path.basename(ap), NodeTag("file", ap))
+
         (parent or self._model).appendRow(it)
+
+        logger.info("[FILE] add path=%s parent=%s", ap, "yes" if parent else "root")
         self._engine_exec("open_book", path=ap)
 
-    def _add_folder(self, folder: str):
-        root = self._create_item(os.path.basename(folder), NodeTag("folder", folder))
+    def _add_folder(self, folder: str, group_name: str):
+        # ★ 仮想グループ（OSパスは保持しない方針）
+        root = self._create_item(group_name, NodeTag("folder", ""))
         self._model.appendRow(root)
+
         for name in sorted(os.listdir(folder)):
             full = os.path.join(folder, name)
             if _is_openable_excel_path(full):
                 self._add_file(full, root)
+
         self.expand(root.index())
+        logger.info("[GROUP] folder imported folder=%s -> group=%s", folder, group_name)
+
+        # Macroに残す（危険操作じゃない）
+        try:
+            self._macro.record("import_folder", folder=folder, group=group_name)
+        except Exception:
+            pass
 
     # =================================================
     # Helpers
@@ -415,8 +502,14 @@ class LauncherTreeView(QTreeView):
 
     def _create_item(self, text: str, tag: NodeTag) -> QStandardItem:
         it = QStandardItem(text)
-        it.setEditable(False)
         it.setData(tag, ROLE_TAG)
+
+        # ★ 編集可否：sheet は不可、それ以外は可
+        if isinstance(tag, NodeTag) and tag.kind == "sheet":
+            it.setEditable(False)
+        else:
+            it.setEditable(True)
+
         return it
 
     def _has_sheet_children(self, item: QStandardItem) -> bool:
@@ -457,3 +550,4 @@ class LauncherTreeView(QTreeView):
         self._inspector.show()
         self._inspector.raise_()
         self._inspector.activateWindow()
+        logger.info("[INSPECTOR] opened")
