@@ -12,9 +12,6 @@ logger = get_logger("ExcelWorker")
 class ExcelWorker(QThread):
     """
     Excel COM ワーカー（遅延起動）
-    - 起動時に Excel を立ち上げない
-    - 必要になった瞬間だけ起動
-    - UI / TreeView への依存なし
     """
 
     sheets_ready = Signal(str, list)
@@ -44,117 +41,110 @@ class ExcelWorker(QThread):
     def request_activate_sheet(self, path: str, sheet: str, front: bool = False):
         self._cmd_q.put(("activate_sheet", os.path.abspath(path), sheet, front))
 
-    def request_quit(self):
-        self._cmd_q.put(("quit",))
-
-    def has_workbook(self, path: str) -> bool:
-        return os.path.abspath(path) in self._books
-
-    def get_workbook(self, path: str):
-        return self._books.get(os.path.abspath(path))
-
     def request_select_cell(self, cell: str):
-        self._enqueue(("select_cell", cell))
+        self._cmd_q.put(("select_cell", cell))
 
     def request_set_cell_value(self, cell: str, value):
-        self._enqueue(("set_cell_value", cell, value))
+        self._cmd_q.put(("set_cell_value", cell, value))
 
     def request_move_cell(self, direction: str, step: int = 1):
-        self._enqueue(("move_cell", direction, step))
+        self._cmd_q.put(("move_cell", direction, step))
 
     def request_copy(self):
-        self._enqueue(("copy",))
+        self._cmd_q.put(("copy",))
 
     def request_paste(self):
-        self._enqueue(("paste",))
+        self._cmd_q.put(("paste",))
+
+    def request_quit(self):
+        self._cmd_q.put(("quit",))
 
     # ===============================
     # worker thread
     # ===============================
     def run(self):
         pythoncom.CoInitialize()
-        logger.info("ExcelWorker thread started")
+        logger.info("[ExcelWorker] thread started")
 
         try:
             while self._running:
                 cmd = self._cmd_q.get()
                 op = cmd[0]
+                args = cmd[1:]
+
+                logger.info("[ExcelWorker] cmd=%s args=%s", op, args)
 
                 if op == "open":
-                    self._open(cmd[1])
+                    self._open(args[0])
 
                 elif op == "close":
-                    self._close(cmd[1])
+                    self._close(args[0])
 
                 elif op == "list_sheets":
-                    self._list_sheets(cmd[1])
+                    self._list_sheets(args[0])
 
                 elif op == "activate_book":
-                    self._activate_book(cmd[1], cmd[2])
+                    self._activate_book(args[0], args[1])
 
                 elif op == "activate_sheet":
-                    self._activate_sheet(cmd[1], cmd[2], cmd[3])
+                    self._activate_sheet(args[0], args[1], args[2])
+
+                elif op == "select_cell":
+                    self._select_cell(args[0])
+
+                elif op == "set_cell_value":
+                    self._set_cell_value(args[0], args[1])
+
+                elif op == "move_cell":
+                    self._move_cell(args[0], args[1])
+
+                elif op == "copy":
+                    self._copy()
+
+                elif op == "paste":
+                    self._paste()
 
                 elif op == "quit":
                     break
 
-                elif cmd == "select_cell":
-                    cell = args[0]
-                    self._book.app.api.Range(cell).Select()
-
-                elif cmd == "set_cell_value":
-                    cell, val = args
-                    self._book.app.api.Range(cell).Value = val
-
-                elif cmd == "move_cell":
-                    direction, step = args
-                    dx, dy = {
-                        "up": (-1, 0),
-                        "down": (1, 0),
-                        "left": (0, -1),
-                        "right": (0, 1),
-                    }[direction]
-                    self._book.app.api.ActiveCell.Offset(dx * step, dy * step).Select()
-
-                elif cmd == "copy":
-                    self._book.app.api.Selection.Copy()
-
-                elif cmd == "paste":
-                    self._book.app.api.ActiveSheet.Paste()
+        except Exception as e:
+            logger.exception("[ExcelWorker] crashed: %s", e)
 
         finally:
             self._shutdown()
             pythoncom.CoUninitialize()
-            logger.info("ExcelWorker thread stopped")
+            logger.info("[ExcelWorker] thread stopped")
 
     # ===============================
-    # internal
+    # internal helpers
     # ===============================
     def _ensure_app(self):
         if self._app is not None:
             return
-
         self._app = win32com.client.Dispatch("Excel.Application")
         self._app.Visible = True
         self._app.DisplayAlerts = False
         logger.info("Excel COM started (lazy)")
 
+    def _active_book(self):
+        if not self._app:
+            return None
+        return self._app.ActiveWorkbook
+
     def _open(self, path: str):
         if path in self._books:
             return
-
         if not os.path.exists(path):
             logger.error("Excel not found: %s", path)
             return
 
         self._ensure_app()
-
         try:
             wb = self._app.Workbooks.Open(path)
             self._books[path] = wb
             logger.info("Excel opened: %s", path)
         except Exception as e:
-            logger.error("Excel open failed: %s (%s)", path, e)
+            logger.exception("Excel open failed: %s", e)
 
     def _close(self, path: str):
         wb = self._books.pop(path, None)
@@ -164,7 +154,7 @@ class ExcelWorker(QThread):
             wb.Close(SaveChanges=False)
             logger.info("Excel closed: %s", path)
         except Exception as e:
-            logger.error("Excel close failed: %s (%s)", path, e)
+            logger.exception("Excel close failed: %s", e)
 
     def _list_sheets(self, path: str):
         wb = self._books.get(path)
@@ -174,7 +164,7 @@ class ExcelWorker(QThread):
             sheets = [ws.Name for ws in wb.Worksheets]
             self.sheets_ready.emit(path, sheets)
         except Exception as e:
-            logger.error("List sheets failed: %s (%s)", path, e)
+            logger.exception("List sheets failed: %s", e)
 
     def _activate_book(self, path: str, front: bool):
         wb = self._books.get(path)
@@ -184,9 +174,8 @@ class ExcelWorker(QThread):
             wb.Activate()
             if front:
                 self._app.Visible = True
-                self._app.WindowState = -4143  # xlNormal
         except Exception as e:
-            logger.error("Activate book failed: %s (%s)", path, e)
+            logger.exception("Activate book failed: %s", e)
 
     def _activate_sheet(self, path: str, sheet: str, front: bool):
         wb = self._books.get(path)
@@ -196,14 +185,45 @@ class ExcelWorker(QThread):
             wb.Worksheets(sheet).Activate()
             if front:
                 self._app.Visible = True
-                self._app.WindowState = -4143
         except Exception as e:
-            logger.error(
-                "Activate sheet failed: %s / %s (%s)", path, sheet, e
-            )
+            logger.exception("Activate sheet failed: %s", e)
+
+    def _select_cell(self, cell: str):
+        wb = self._active_book()
+        if not wb:
+            return
+        wb.Application.Range(cell).Select()
+
+    def _set_cell_value(self, cell: str, value):
+        wb = self._active_book()
+        if not wb:
+            return
+        wb.Application.Range(cell).Value = value
+
+    def _move_cell(self, direction: str, step: int):
+        wb = self._active_book()
+        if not wb:
+            return
+        dx, dy = {
+            "up": (-step, 0),
+            "down": (step, 0),
+            "left": (0, -step),
+            "right": (0, step),
+        }[direction]
+        wb.Application.ActiveCell.Offset(dx, dy).Select()
+
+    def _copy(self):
+        wb = self._active_book()
+        if wb:
+            wb.Application.Selection.Copy()
+
+    def _paste(self):
+        wb = self._active_book()
+        if wb:
+            wb.Application.ActiveSheet.Paste()
 
     def _shutdown(self):
-        for path, wb in list(self._books.items()):
+        for wb in self._books.values():
             try:
                 wb.Close(SaveChanges=False)
             except Exception:
