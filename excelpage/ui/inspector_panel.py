@@ -57,6 +57,9 @@ class InspectorPanel(QWidget):
         self.resize(620, 420)
         self.setStyleSheet("QWidget { background-color:#0f0f0f; }")
 
+        # ★ Inspector 自体は常にキーを取れる状態にする
+        self.setFocusPolicy(Qt.StrongFocus)
+
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(8)
@@ -80,6 +83,9 @@ class InspectorPanel(QWidget):
                 border-radius:6px;
             }
         """)
+        # ★ ラベルがフォーカスを奪わない
+        self.addr_label.setFocusPolicy(Qt.NoFocus)
+        self.addr_label.setTextInteractionFlags(Qt.NoTextInteraction)
 
         # ★ 幅固定の REC スロット（UIズレ防止）
         self.rec_label = QLabel("")
@@ -91,6 +97,8 @@ class InspectorPanel(QWidget):
                 font-weight:900;
             }
         """)
+        self.rec_label.setFocusPolicy(Qt.NoFocus)
+        self.rec_label.setTextInteractionFlags(Qt.NoTextInteraction)
 
         # ★ 操作ヒント（常時表示）
         self.hint_label = QLabel("Ctrl+Shift+R:REC   Ctrl+Shift+S:SAVE")
@@ -103,6 +111,8 @@ class InspectorPanel(QWidget):
             }
         """)
         self.hint_label.setFixedWidth(230)
+        self.hint_label.setFocusPolicy(Qt.NoFocus)
+        self.hint_label.setTextInteractionFlags(Qt.NoTextInteraction)
 
         header.addWidget(self.addr_label, 1)
         header.addWidget(self.rec_label, 0)
@@ -119,6 +129,8 @@ class InspectorPanel(QWidget):
         fx.setFixedWidth(26)
         fx.setAlignment(Qt.AlignCenter)
         fx.setStyleSheet("color:#6cf; font-weight:700;")
+        fx.setFocusPolicy(Qt.NoFocus)
+        fx.setTextInteractionFlags(Qt.NoTextInteraction)
 
         self.editor = QLineEdit()
         self.editor.setPlaceholderText("F2 to edit")
@@ -133,6 +145,10 @@ class InspectorPanel(QWidget):
             }
             QLineEdit:focus { border:1px solid #6cf; }
         """)
+
+        # ★ 通常時は editor がフォーカスを奪わない（編集モード時だけ許可）
+        self.editor.setFocusPolicy(Qt.NoFocus)
+        self.editor.setReadOnly(True)
 
         bar.addWidget(fx)
         bar.addWidget(self.editor, 1)
@@ -152,9 +168,14 @@ class InspectorPanel(QWidget):
                 padding:6px;
             }
         """)
+
+        # ★ ログ領域がフォーカス/キーを奪わない
+        self.log.setFocusPolicy(Qt.NoFocus)
+        self.log.setTextInteractionFlags(Qt.NoTextInteraction)
+
         root.addWidget(self.log)
 
-        # 初回：操作案内をログにも出す（分かりやすさ重視）
+        # 初回：操作案内
         self._log_add("Help: Ctrl+Shift+R = REC  /  Ctrl+Shift+S = SAVE", "#777")
 
         # =================================================
@@ -170,9 +191,40 @@ class InspectorPanel(QWidget):
         self._poll.timeout.connect(self._poll_context)
         self._poll.start(self.POLL_MS)
 
-        QTimer.singleShot(0, self.setFocus)
+        QTimer.singleShot(0, self._focus_inspector)
 
         logger.info("InspectorPanel ready")
+
+    # =================================================
+    # Focus helpers
+    # =================================================
+    def _focus_inspector(self):
+        """
+        Inspector が前面にいるときは、Panel 本体がキー司令塔になる。
+        ラベル/ログ/editor へフォーカスが逃げない前提で、最後にここへ戻す。
+        """
+        try:
+            self.setFocus(Qt.ActiveWindowFocusReason)
+        except Exception as e:
+            logger.error("[Inspector] focus failed: %s", e, exc_info=True)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        try:
+            self.raise_()
+            self.activateWindow()
+        except Exception as e:
+            logger.error("[Inspector] showEvent activate failed: %s", e, exc_info=True)
+        self._focus_inspector()
+
+    def mousePressEvent(self, event):
+        # ★ どこをクリックしても Inspector がキー優先になる
+        try:
+            if not self._edit_mode:
+                self._focus_inspector()
+        except Exception as e:
+            logger.error("[Inspector] mousePress focus failed: %s", e, exc_info=True)
+        super().mousePressEvent(event)
 
     # =================================================
     # External bind
@@ -188,7 +240,7 @@ class InspectorPanel(QWidget):
     # =================================================
     def eventFilter(self, obj, event):
         if event.type() == QEvent.KeyPress:
-            # 編集中は editor に文字入力を任せる（握りつぶさない）
+            # ★ 編集中は editor に文字入力を任せる（それ以外は Inspector が握る）
             if self._edit_mode and obj is self.editor:
                 return False
             self._handle_key(event)
@@ -219,6 +271,8 @@ class InspectorPanel(QWidget):
         # ---- F2 ----
         if key == Qt.Key_F2:
             self._edit_mode = True
+            self.editor.setReadOnly(False)
+            self.editor.setFocusPolicy(Qt.StrongFocus)
             self.editor.setFocus(Qt.OtherFocusReason)
             self.editor.selectAll()
             self._log_add("Edit (F2)", "#7fd7ff")
@@ -231,15 +285,21 @@ class InspectorPanel(QWidget):
                 self._exec("set_cell_value", cell="*", value=val)
                 self._log_add(f"Set = {val}", "#ffb347")
                 self.editor.clear()
+
+                # ★ 編集終了：editor をフォーカス不能へ戻す
                 self._edit_mode = False
-                self.setFocus()
+                self.editor.setReadOnly(True)
+                self.editor.setFocusPolicy(Qt.NoFocus)
+                self._focus_inspector()
                 return
 
             if key == Qt.Key_Escape:
                 self.editor.clear()
                 self._edit_mode = False
+                self.editor.setReadOnly(True)
+                self.editor.setFocusPolicy(Qt.NoFocus)
                 self._log_add("Edit cancel (Esc)", "#aaa")
-                self.setFocus()
+                self._focus_inspector()
                 return
 
             return
@@ -304,7 +364,16 @@ class InspectorPanel(QWidget):
             self._log_add("REC STOP (Ctrl+Shift+R)", "#ff4d4d")
 
     def _save_macro_dialog(self):
-        if self._macro.steps_count() == 0:
+        # steps_count が無い実装でも死なないように最低限ガード
+        try:
+            cnt = self._macro.steps_count()
+        except Exception:
+            try:
+                cnt = len(getattr(self._macro, "_steps", []))
+            except Exception:
+                cnt = 0
+
+        if cnt == 0:
             self._log_add("No macro steps (Ctrl+Shift+S)", "#aaa")
             return
 
@@ -318,7 +387,7 @@ class InspectorPanel(QWidget):
         try:
             self._macro.save_json(path)
             self._log_add(
-                f"Saved macro ({self._macro.steps_count()} steps) (Ctrl+Shift+S)",
+                f"Saved macro ({cnt} steps) (Ctrl+Shift+S)",
                 "#7fd7ff",
             )
         except Exception as e:
@@ -335,7 +404,7 @@ class InspectorPanel(QWidget):
         try:
             ctx = self._tree._engine_exec("get_active_context")
         except Exception as e:
-            logger.error("[CTX] get_active_context failed: %s", e)
+            logger.error("[CTX] get_active_context failed: %s", e, exc_info=True)
             return
 
         if not isinstance(ctx, dict):

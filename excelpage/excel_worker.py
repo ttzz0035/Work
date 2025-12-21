@@ -518,9 +518,6 @@ class ExcelWorker(QThread):
         except Exception as e:
             logger.error("[ExcelWorker] set_cell_value failed: %s", e, exc_info=True)
 
-    # -------------------------------------------------
-    # ★修正ポイント 1: move_cell は ActiveCell 基準（Excel互換）
-    # -------------------------------------------------
     def _move_cell(self, direction: str, step: int):
         try:
             wb = self._active_book()
@@ -528,9 +525,11 @@ class ExcelWorker(QThread):
                 logger.info("[ExcelWorker] move_cell ignored (no active book)")
                 return
 
-            before = self._snapshot_ctx_from_com()
-
             app = self._app
+            ac = app.ActiveCell  # ★ 常に ActiveCell 基準
+
+            before = str(ac.Address)
+
             row_off, col_off = {
                 "up": (-step, 0),
                 "down": (step, 0),
@@ -538,24 +537,16 @@ class ExcelWorker(QThread):
                 "right": (0, step),
             }[direction]
 
-            # ActiveCell 基準で移動（方向ズレ解消）
-            ac = app.ActiveCell
-            if ac is None:
-                logger.info("[ExcelWorker] move_cell ignored (no ActiveCell)")
-                return
-
-            target = ac.Offset(RowOffset=row_off, ColumnOffset=col_off)
+            target = ac.Offset(row_off, col_off)  # ★ 位置引数のみ
+            after = str(target.Address)
 
             logger.info(
-                "[ExcelWorker] move_cell dir=%s step=%s row_off=%s col_off=%s",
-                direction, step, row_off, col_off
+                "[ExcelWorker] move_cell %s -> %s dir=%s",
+                before, after, direction
             )
 
             target.Select()
-
             self._update_context_cache()
-            after = dict(self._ctx)
-            self._log_before_after("move_cell", before, after, extra=f"dir={direction} step={step}")
 
         except Exception as e:
             logger.error(
