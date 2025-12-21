@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 import queue
-from typing import Dict, Any, Optional
+from typing import Dict, Optional
 
 import pythoncom
 import win32com.client
@@ -36,7 +36,7 @@ class ExcelWorker(QThread):
     sheets_ready = Signal(str, list)
     active_cell_changed = Signal(str)
 
-    # ★ 追加：TreeView 側で「閉じ終わり」を待つための通知
+    # TreeView 側で「閉じ終わり」を待つための通知
     book_closed = Signal(str)
     book_close_failed = Signal(str, str)
     quit_finished = Signal()
@@ -49,6 +49,14 @@ class ExcelWorker(QThread):
         "right": -4161,  # xlToRight
     }
 
+    # SendKeys 用
+    _SK_ARROW = {
+        "up": "{UP}",
+        "down": "{DOWN}",
+        "left": "{LEFT}",
+        "right": "{RIGHT}",
+    }
+
     def __init__(self):
         super().__init__()
         self._cmd_q: queue.Queue = queue.Queue()
@@ -58,7 +66,7 @@ class ExcelWorker(QThread):
         self._running: bool = True
         self._active_path: str = ""
 
-        # ★ UIポーリング用のコンテキストキャッシュ（COMは触らない）
+        # UIポーリング用のコンテキストキャッシュ（COMは触らない）
         self._ctx: Dict[str, str] = {"address": "", "sheet": "", "workbook": ""}
 
         logger.info("[ExcelWorker] initialized")
@@ -160,7 +168,7 @@ class ExcelWorker(QThread):
     def get_active_context(self) -> Dict[str, str]:
         """
         Inspector が UIスレッドから呼ぶ想定。
-        ★COMに触ると死ぬので、キャッシュを返すだけ。
+        COMに触ると死ぬので、キャッシュを返すだけ。
         """
         try:
             return dict(self._ctx)
@@ -198,9 +206,6 @@ class ExcelWorker(QThread):
 
                     elif op == "select_cell":
                         self._select_cell(args[0])
-
-                    elif op == "select_range":
-                        self._select_range(args[0], args[1])
 
                     elif op == "set_cell_value":
                         self._set_cell_value(args[0], args[1])
@@ -271,7 +276,7 @@ class ExcelWorker(QThread):
         if self._app:
             return
         logger.info("[ExcelWorker] DispatchEx Excel.Application")
-        # ★ DispatchEx の方が他Excelインスタンスと分離できて安定しやすい
+        # DispatchEx の方が他Excelインスタンスと分離できて安定しやすい
         self._app = win32com.client.DispatchEx("Excel.Application")
         self._app.Visible = True
         self._app.DisplayAlerts = False
@@ -311,53 +316,70 @@ class ExcelWorker(QThread):
     def _active_book(self) -> Optional[object]:
         if not self._app:
             return None
-        wb = self._try_fix_active_book()
-        return wb
+        return self._try_fix_active_book()
+
+    def _snapshot_ctx_from_com(self) -> Dict[str, str]:
+        """
+        worker thread 内でのみ呼ぶ（COMに触る）
+        """
+        if not self._app:
+            return {"address": "", "sheet": "", "workbook": ""}
+
+        addr = ""
+        sheet = ""
+        book = ""
+
+        try:
+            ac = self._app.ActiveCell
+            if ac is not None:
+                addr = str(ac.Address)
+        except Exception:
+            addr = ""
+
+        try:
+            sh = self._app.ActiveSheet
+            if sh is not None:
+                sheet = str(sh.Name)
+        except Exception:
+            sheet = ""
+
+        try:
+            wb = self._app.ActiveWorkbook
+            if wb is not None:
+                book = str(wb.Name)
+        except Exception:
+            book = ""
+
+        return {"address": addr, "sheet": sheet, "workbook": book}
 
     def _update_context_cache(self):
         """
-        ★ worker thread 内でのみ COM に触って ctx を更新する
+        worker thread 内でのみ COM に触って ctx を更新する
         """
         try:
-            if not self._app:
-                self._ctx = {"address": "", "sheet": "", "workbook": ""}
-                return
-
-            addr = ""
-            sheet = ""
-            book = ""
-
-            try:
-                ac = self._app.ActiveCell
-                if ac is not None:
-                    addr = str(ac.Address)
-            except Exception:
-                addr = ""
-
-            try:
-                sh = self._app.ActiveSheet
-                if sh is not None:
-                    sheet = str(sh.Name)
-            except Exception:
-                sheet = ""
-
-            try:
-                wb = self._app.ActiveWorkbook
-                if wb is not None:
-                    book = str(wb.Name)
-            except Exception:
-                book = ""
-
-            self._ctx = {"address": addr, "sheet": sheet, "workbook": book}
-
+            self._ctx = self._snapshot_ctx_from_com()
+            addr = self._ctx.get("address", "")
             if addr:
                 try:
                     self.active_cell_changed.emit(addr)
                 except Exception:
                     pass
-
         except Exception as e:
             logger.error("[ExcelWorker] update_context_cache failed: %s", e, exc_info=True)
+
+    def _log_before_after(self, op: str, before: Dict[str, str], after: Dict[str, str], extra: str = ""):
+        logger.info(
+            "[ExcelWorker] %s %s before=%s!%s(%s) after=%s!%s(%s)%s",
+            op,
+            extra,
+            before.get("sheet", ""),
+            before.get("address", ""),
+            before.get("workbook", ""),
+            after.get("sheet", ""),
+            after.get("address", ""),
+            after.get("workbook", ""),
+            "",
+        )
 
     # ===============================
     # Excel ops
@@ -459,31 +481,18 @@ class ExcelWorker(QThread):
                 logger.info("[ExcelWorker] select_cell ignored (no active book) cell=%s", cell)
                 return
 
+            before = self._snapshot_ctx_from_com()
+
             app = self._app
             logger.info("[ExcelWorker] select_cell %s", cell)
             app.Range(cell).Select()
+
             self._update_context_cache()
+            after = dict(self._ctx)
+            self._log_before_after("select_cell", before, after, extra=f"cell={cell}")
 
         except Exception as e:
             logger.error("[ExcelWorker] select_cell failed: %s", e, exc_info=True)
-
-    def _select_range(self, anchor: str, active: str):
-        """
-        ※ 現状は anchor -> 現在ActiveCell へ Extend（Tree側でanchor管理）
-        """
-        try:
-            wb = self._active_book()
-            if not wb:
-                return
-            app = self._app
-
-            logger.info("[ExcelWorker] select_range anchor=%s active=%s", anchor, active)
-            app.Range(anchor).Select()
-            app.Selection.Extend(app.ActiveCell)
-            self._update_context_cache()
-
-        except Exception as e:
-            logger.error("[ExcelWorker] select_range failed: %s", e, exc_info=True)
 
     def _set_cell_value(self, cell: str, value):
         try:
@@ -491,6 +500,8 @@ class ExcelWorker(QThread):
             if not wb:
                 logger.info("[ExcelWorker] set_cell_value ignored (no active book)")
                 return
+
+            before = self._snapshot_ctx_from_com()
 
             app = self._app
             logger.info("[ExcelWorker] set_cell_value cell=%s value=%s", cell, value)
@@ -501,10 +512,15 @@ class ExcelWorker(QThread):
                 app.Range(cell).Value = value
 
             self._update_context_cache()
+            after = dict(self._ctx)
+            self._log_before_after("set_cell_value", before, after, extra=f"cell={cell}")
 
         except Exception as e:
             logger.error("[ExcelWorker] set_cell_value failed: %s", e, exc_info=True)
 
+    # -------------------------------------------------
+    # ★修正ポイント 1: move_cell は ActiveCell 基準（Excel互換）
+    # -------------------------------------------------
     def _move_cell(self, direction: str, step: int):
         try:
             wb = self._active_book()
@@ -512,49 +528,77 @@ class ExcelWorker(QThread):
                 logger.info("[ExcelWorker] move_cell ignored (no active book)")
                 return
 
+            before = self._snapshot_ctx_from_com()
+
             app = self._app
-            dx, dy = {
+            row_off, col_off = {
                 "up": (-step, 0),
                 "down": (step, 0),
                 "left": (0, -step),
                 "right": (0, step),
             }[direction]
 
-            logger.info("[ExcelWorker] move_cell dir=%s step=%s", direction, step)
-            app.ActiveCell.Offset(dx, dy).Select()
+            # ActiveCell 基準で移動（方向ズレ解消）
+            ac = app.ActiveCell
+            if ac is None:
+                logger.info("[ExcelWorker] move_cell ignored (no ActiveCell)")
+                return
+
+            target = ac.Offset(RowOffset=row_off, ColumnOffset=col_off)
+
+            logger.info(
+                "[ExcelWorker] move_cell dir=%s step=%s row_off=%s col_off=%s",
+                direction, step, row_off, col_off
+            )
+
+            target.Select()
+
             self._update_context_cache()
+            after = dict(self._ctx)
+            self._log_before_after("move_cell", before, after, extra=f"dir={direction} step={step}")
 
         except Exception as e:
-            logger.error("[ExcelWorker] move_cell failed: %s", e, exc_info=True)
+            logger.error(
+                "[ExcelWorker] move_cell failed dir=%s step=%s err=%s",
+                direction, step, e, exc_info=True
+            )
 
+    # -------------------------------------------------
+    # ★修正ポイント 2: Shift+Arrow は SendKeys（Excelの選択状態と完全一致）
+    #   Extend は環境差で死ぬ/Selection起点にするとズレるため
+    # -------------------------------------------------
     def _select_move(self, direction: str):
+        """
+        Shift + Arrow 相当（選択範囲を1セル拡張）
+        """
         try:
             wb = self._active_book()
             if not wb:
+                logger.info("[ExcelWorker] select_move ignored (no active book)")
                 return
 
+            before = self._snapshot_ctx_from_com()
+
             app = self._app
-            dx, dy = {
-                "up": (-1, 0),
-                "down": (1, 0),
-                "left": (0, -1),
-                "right": (0, 1),
-            }[direction]
+            key = self._SK_ARROW[direction]
 
-            anchor = app.Selection.Cells(1, 1)
-            target = app.ActiveCell.Offset(dx, dy)
+            # Shift+Arrow
+            logger.info("[ExcelWorker] select_move dir=%s sendkeys=+%s", direction, key)
+            app.SendKeys("+" + key)
 
-            logger.info(
-                "[ExcelWorker] select_move anchor=%s target=%s",
-                anchor.Address, target.Address
-            )
-
-            app.Range(anchor, target).Select()
             self._update_context_cache()
+            after = dict(self._ctx)
+            self._log_before_after("select_move", before, after, extra=f"dir={direction}")
 
         except Exception as e:
-            logger.error("[ExcelWorker] select_move failed: %s", e, exc_info=True)
+            logger.error(
+                "[ExcelWorker] select_move failed dir=%s err=%s",
+                direction, e, exc_info=True
+            )
 
+    # -------------------------------------------------
+    # Ctrl+Arrow は COM End でOK（安定）
+    # -------------------------------------------------
     def _move_edge(self, direction: str):
         """
         Ctrl + Arrow 相当（端まで移動）
@@ -565,31 +609,44 @@ class ExcelWorker(QThread):
                 logger.info("[ExcelWorker] move_edge ignored (no active book)")
                 return
 
+            before = self._snapshot_ctx_from_com()
+
             app = self._app
             logger.info("[ExcelWorker] move_edge dir=%s", direction)
             app.ActiveCell.End(self._XL_DIR[direction]).Select()
+
             self._update_context_cache()
+            after = dict(self._ctx)
+            self._log_before_after("move_edge", before, after, extra=f"dir={direction}")
 
         except Exception as e:
             logger.error("[ExcelWorker] move_edge failed: %s", e, exc_info=True)
 
+    # -------------------------------------------------
+    # ★修正ポイント 3: Ctrl+Shift+Arrow も SendKeys（選択の起点ズレを起こさない）
+    # -------------------------------------------------
     def _select_edge(self, direction: str):
+        """
+        Ctrl + Shift + Arrow 相当（端まで選択）
+        """
         try:
             wb = self._active_book()
             if not wb:
+                logger.info("[ExcelWorker] select_edge ignored (no active book)")
                 return
 
+            before = self._snapshot_ctx_from_com()
+
             app = self._app
-            anchor = app.Selection.Cells(1, 1)
-            target = app.ActiveCell.End(self._XL_DIR[direction])
+            key = self._SK_ARROW[direction]
 
-            logger.info(
-                "[ExcelWorker] select_edge anchor=%s target=%s",
-                anchor.Address, target.Address
-            )
+            # Ctrl+Shift+Arrow
+            logger.info("[ExcelWorker] select_edge dir=%s sendkeys=^+%s", direction, key)
+            app.SendKeys("^+" + key)
 
-            app.Range(anchor, target).Select()
             self._update_context_cache()
+            after = dict(self._ctx)
+            self._log_before_after("select_edge", before, after, extra=f"dir={direction}")
 
         except Exception as e:
             logger.error("[ExcelWorker] select_edge failed: %s", e, exc_info=True)
@@ -600,10 +657,8 @@ class ExcelWorker(QThread):
             if not wb:
                 logger.info("[ExcelWorker] copy ignored (no active book)")
                 return
-
             logger.info("[ExcelWorker] copy")
             self._app.Selection.Copy()
-
         except Exception as e:
             logger.error("[ExcelWorker] copy failed: %s", e, exc_info=True)
 
@@ -613,10 +668,8 @@ class ExcelWorker(QThread):
             if not wb:
                 logger.info("[ExcelWorker] cut ignored (no active book)")
                 return
-
             logger.info("[ExcelWorker] cut")
             self._app.Selection.Cut()
-
         except Exception as e:
             logger.error("[ExcelWorker] cut failed: %s", e, exc_info=True)
 
@@ -627,9 +680,14 @@ class ExcelWorker(QThread):
                 logger.info("[ExcelWorker] paste ignored (no active book)")
                 return
 
+            before = self._snapshot_ctx_from_com()
+
             logger.info("[ExcelWorker] paste")
             self._app.ActiveSheet.Paste()
+
             self._update_context_cache()
+            after = dict(self._ctx)
+            self._log_before_after("paste", before, after)
 
         except Exception as e:
             logger.error("[ExcelWorker] paste failed: %s", e, exc_info=True)
@@ -641,9 +699,14 @@ class ExcelWorker(QThread):
                 logger.info("[ExcelWorker] undo ignored (no active book)")
                 return
 
+            before = self._snapshot_ctx_from_com()
+
             logger.info("[ExcelWorker] undo")
             self._app.Undo()
+
             self._update_context_cache()
+            after = dict(self._ctx)
+            self._log_before_after("undo", before, after)
 
         except Exception as e:
             logger.error("[ExcelWorker] undo failed: %s", e, exc_info=True)
@@ -658,9 +721,14 @@ class ExcelWorker(QThread):
                 logger.info("[ExcelWorker] redo ignored (no active book)")
                 return
 
+            before = self._snapshot_ctx_from_com()
+
             logger.info("[ExcelWorker] redo (SendKeys ^y)")
             self._app.SendKeys("^y")
+
             self._update_context_cache()
+            after = dict(self._ctx)
+            self._log_before_after("redo", before, after)
 
         except Exception as e:
             logger.error("[ExcelWorker] redo failed: %s", e, exc_info=True)
@@ -672,9 +740,14 @@ class ExcelWorker(QThread):
                 logger.info("[ExcelWorker] select_all ignored (no active book)")
                 return
 
+            before = self._snapshot_ctx_from_com()
+
             logger.info("[ExcelWorker] select_all")
             self._app.Cells.Select()
+
             self._update_context_cache()
+            after = dict(self._ctx)
+            self._log_before_after("select_all", before, after)
 
         except Exception as e:
             logger.error("[ExcelWorker] select_all failed: %s", e, exc_info=True)
@@ -686,9 +759,14 @@ class ExcelWorker(QThread):
                 logger.info("[ExcelWorker] fill_down ignored (no active book)")
                 return
 
+            before = self._snapshot_ctx_from_com()
+
             logger.info("[ExcelWorker] fill_down")
             self._app.Selection.FillDown()
+
             self._update_context_cache()
+            after = dict(self._ctx)
+            self._log_before_after("fill_down", before, after)
 
         except Exception as e:
             logger.error("[ExcelWorker] fill_down failed: %s", e, exc_info=True)
@@ -700,9 +778,14 @@ class ExcelWorker(QThread):
                 logger.info("[ExcelWorker] fill_right ignored (no active book)")
                 return
 
+            before = self._snapshot_ctx_from_com()
+
             logger.info("[ExcelWorker] fill_right")
             self._app.Selection.FillRight()
+
             self._update_context_cache()
+            after = dict(self._ctx)
+            self._log_before_after("fill_right", before, after)
 
         except Exception as e:
             logger.error("[ExcelWorker] fill_right failed: %s", e, exc_info=True)
