@@ -240,11 +240,21 @@ class InspectorPanel(QWidget):
     # =================================================
     def eventFilter(self, obj, event):
         if event.type() == QEvent.KeyPress:
-            # ★ 編集中は editor に文字入力を任せる（それ以外は Inspector が握る）
+            # ★ AutoRepeat は無視（最重要）
+            if event.isAutoRepeat():
+                return True
+
+            # 編集中は editor に任せる
             if self._edit_mode and obj is self.editor:
                 return False
+
             self._handle_key(event)
             return True
+
+        if event.type() == QEvent.KeyRelease:
+            # ★ Release も握りつぶす（Excelへ行かせない）
+            return True
+
         return super().eventFilter(obj, event)
 
     # =================================================
