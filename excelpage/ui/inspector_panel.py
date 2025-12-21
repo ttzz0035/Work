@@ -423,7 +423,10 @@ class InspectorPanel(QWidget):
     # Event filter
     # =================================================
     def eventFilter(self, obj, event):
-        # 重要：KeyPress/Release を完全に記録する
+
+        # -----------------------------
+        # KeyPress：記録のみ（EXECしない）
+        # -----------------------------
         if event.type() == QEvent.KeyPress:
             e = event  # type: ignore[assignment]
             if not isinstance(e, QKeyEvent):
@@ -441,14 +444,26 @@ class InspectorPanel(QWidget):
                 logger.info("[KEY] trace=%s pass_to_editor=True", trace_id)
                 return False
 
-            self._handle_key(e, trace_id)
+            # ★ ここでは EXEC しない
             return True
 
+        # -----------------------------
+        # KeyRelease：EXEC はここで
+        # -----------------------------
         if event.type() == QEvent.KeyRelease:
             e = event  # type: ignore[assignment]
-            if isinstance(e, QKeyEvent):
-                trace_id = self._next_trace_id()
-                self._log_key_event("release", obj, e, trace_id)
+            if not isinstance(e, QKeyEvent):
+                return super().eventFilter(obj, event)
+
+            trace_id = self._next_trace_id()
+            self._log_key_event("release", obj, e, trace_id)
+
+            # 編集中は editor に任せる
+            if self._edit_mode and obj is self.editor:
+                logger.info("[KEY] trace=%s pass_to_editor=True", trace_id)
+                return False
+
+            self._handle_key(e, trace_id)
             return True
 
         return super().eventFilter(obj, event)
