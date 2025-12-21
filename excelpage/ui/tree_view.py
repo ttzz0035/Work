@@ -179,6 +179,9 @@ class LauncherTreeView(QTreeView):
         )
         self._busy_label.setAttribute(Qt.WA_TransparentForMouseEvents)
 
+        # --- macro play ---
+        self._macro_play_thread = None
+
         logger.info("LauncherTreeView initialized")
 
     # =================================================
@@ -398,9 +401,23 @@ class LauncherTreeView(QTreeView):
         if source == "inspector":
             try:
                 if self._macro.is_recording():
-                    self._macro.record(op, **kwargs)
+                    ctx = {}
+                    try:
+                        ctx = self._excel.get_active_context() or {}
+                    except Exception as e:
+                        logger.error("[MACRO] get_active_context failed: %s", e)
+
+                    # ★ 文脈を付与（上書きしない）
+                    record_kwargs = dict(kwargs)
+                    if "workbook" not in record_kwargs:
+                        record_kwargs["workbook"] = ctx.get("workbook", "")
+                    if "sheet" not in record_kwargs:
+                        record_kwargs["sheet"] = ctx.get("sheet", "")
+
+                    self._macro.record(op, **record_kwargs)
+
             except Exception as e:
-                logger.error("macro record failed: %s", e)
+                logger.error("macro record failed: %s", e, exc_info=True)
 
         # =================================================
         # Execute
@@ -532,6 +549,9 @@ class LauncherTreeView(QTreeView):
 
         menu.addSeparator()
         menu.addAction("Inspector (Record Mode)", self._open_inspector)
+        menu.addSeparator()
+        menu.addAction("▶ Run Macro...", self.macro_play_dialog)
+        menu.addAction("⏹ Stop Macro", self.macro_stop_play)
 
         sheets = self._get_selected_sheet_tags()
         if len(sheets) == 2:
@@ -863,6 +883,43 @@ class LauncherTreeView(QTreeView):
 
         logger.info("[TreeView] shutdown_excel_on_exit done")
 
+    def macro_play_dialog(self):
+        logger.info(
+            "[MACRO] play requested running=%s",
+            bool(self._macro_play_thread and self._macro_play_thread.isRunning()),
+        )
+        if self._macro_play_thread and self._macro_play_thread.isRunning():
+            QMessageBox.information(self, "Macro", "マクロは既に実行中です")
+            return
+
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Run Macro", "", "Macro JSON (*.json)"
+        )
+        if not path:
+            return
+
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as e:
+            QMessageBox.critical(self, "Macro", f"読み込み失敗:\n{e}")
+            return
+
+        self._macro_play_thread = _MacroPlayThread(self, data)
+        self._macro_play_thread.start()
+
+        logger.info("[MACRO] play start path=%s", path)
+
+    def macro_stop_play(self):
+        logger.info(
+            "[MACRO] stop button pressed thread_exists=%s running=%s",
+            bool(self._macro_play_thread),
+            bool(self._macro_play_thread and self._macro_play_thread.isRunning()),
+        )
+        if self._macro_play_thread:
+            self._macro_play_thread.stop()
+            logger.info("[MACRO] stop requested")
+
     # =================================================
     # Close Event
     # =================================================
@@ -874,3 +931,87 @@ class LauncherTreeView(QTreeView):
             logger.error("[TreeView] closeEvent shutdown failed: %s", e, exc_info=True)
         logger.info("[TreeView] closeEvent -> super")
         super().closeEvent(event)
+
+class _MacroPlayThread(QThread):
+    def __init__(self, tree: "LauncherTreeView", macro: Dict[str, Any]):
+        super().__init__()
+        self._tree = tree
+        self._macro = macro
+        self._stop = False
+
+        self._log = get_logger("MacroPlayThread")
+        self._log.info(
+            "[INIT] thread created isRunning=%s",
+            
+            self.isRunning(),
+        )
+
+        # Qt finished シグナル監視
+        self.finished.connect(self._on_finished)
+
+    # -------------------------------------------------
+    # public
+    # -------------------------------------------------
+    def stop(self):
+        self._stop = True
+        self._log.info(
+            "[STOP] stop requested isRunning=%s",
+            
+            self.isRunning(),
+        )
+
+    # -------------------------------------------------
+    # thread entry
+    # -------------------------------------------------
+    def run(self):
+        self._log.info( "[RUN] start")
+
+        steps = self._macro.get("steps", [])
+        self._log.info("[RUN] steps count=%s", len(steps))
+
+        for i, step in enumerate(steps):
+            if self._stop:
+                self._log.warning(
+                    "[RUN] stop flag detected at step=%s",
+                    i,
+                )
+                break
+
+            op = step.get("op")
+            args = step.get("args", {})
+
+            self._log.info(
+                "[STEP] idx=%s op=%s args=%s",
+                i,
+                op,
+                args,
+            )
+
+            try:
+                self._tree._engine_exec(op, source="macro", **args)
+                self._log.info(
+                    "[STEP] idx=%s op=%s DONE",
+                    i,
+                    op,
+                )
+            except Exception as e:
+                self._log.error(
+                    "[STEP] idx=%s FAILED op=%s err=%s",
+                    i,
+                    op,
+                    e,
+                    exc_info=True,
+                )
+                break
+
+        self._log.info("[RUN] end stopped=%s", self._stop)
+
+    # -------------------------------------------------
+    # Qt lifecycle
+    # -------------------------------------------------
+    def _on_finished(self):
+        self._log.info(
+            "[FINISHED] thread finished isRunning=%s",
+            
+            self.isRunning(),
+        )
