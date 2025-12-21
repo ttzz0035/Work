@@ -511,13 +511,9 @@ class ExcelWorker(QThread):
             logger.error("[ExcelWorker] move_cell failed: %s", e, exc_info=True)
 
     def _select_move(self, direction: str):
-        """
-        Shift + Arrow 相当（選択範囲を1セル拡張）
-        """
         try:
             wb = self._active_book()
             if not wb:
-                logger.info("[ExcelWorker] select_move ignored (no active book)")
                 return
 
             app = self._app
@@ -528,8 +524,15 @@ class ExcelWorker(QThread):
                 "right": (0, 1),
             }[direction]
 
-            logger.info("[ExcelWorker] select_move dir=%s", direction)
-            app.Selection.Extend(app.ActiveCell.Offset(dx, dy))
+            anchor = app.Selection.Cells(1, 1)
+            target = app.ActiveCell.Offset(dx, dy)
+
+            logger.info(
+                "[ExcelWorker] select_move anchor=%s target=%s",
+                anchor.Address, target.Address
+            )
+
+            app.Range(anchor, target).Select()
             self._update_context_cache()
 
         except Exception as e:
@@ -554,18 +557,21 @@ class ExcelWorker(QThread):
             logger.error("[ExcelWorker] move_edge failed: %s", e, exc_info=True)
 
     def _select_edge(self, direction: str):
-        """
-        Ctrl + Shift + Arrow 相当（端まで選択）
-        """
         try:
             wb = self._active_book()
             if not wb:
-                logger.info("[ExcelWorker] select_edge ignored (no active book)")
                 return
 
             app = self._app
-            logger.info("[ExcelWorker] select_edge dir=%s", direction)
-            app.Selection.Extend(app.ActiveCell.End(self._XL_DIR[direction]))
+            anchor = app.Selection.Cells(1, 1)
+            target = app.ActiveCell.End(self._XL_DIR[direction])
+
+            logger.info(
+                "[ExcelWorker] select_edge anchor=%s target=%s",
+                anchor.Address, target.Address
+            )
+
+            app.Range(anchor, target).Select()
             self._update_context_cache()
 
         except Exception as e:
