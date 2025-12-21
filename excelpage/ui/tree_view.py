@@ -1,4 +1,3 @@
-# ui/tree_view.py
 from __future__ import annotations
 
 import os
@@ -34,6 +33,8 @@ from logger import get_logger
 from ui.diff_dialog import DiffOptionDialog
 from ui.inspector_panel import InspectorPanel
 from services.macro_recorder import get_macro_recorder
+
+from ui.hover_action_delegate import HoverActionDelegate
 
 
 logger = get_logger("TreeView")
@@ -100,6 +101,7 @@ class LauncherTreeView(QTreeView):
     - Macro 録画（意味コマンド）
     - グループ追加/フォルダ読込：グループ名入力（空ならフォルダ名）
     - DnD/リネームはUIのみ（OS移動しない）
+    - ホバー時に編集/削除ボタン表示（delegate）
     """
 
     # -------------------------------------------------
@@ -131,6 +133,16 @@ class LauncherTreeView(QTreeView):
         self.setAcceptDrops(True)
         self.setDropIndicatorShown(True)
         self.setDragDropMode(QAbstractItemView.InternalMove)
+
+        # --- hover tracking ---
+        self.setMouseTracking(True)
+
+        # --- delegate (hover action buttons) ---
+        self._hover_delegate = HoverActionDelegate(ROLE_TAG, self)
+        self.setItemDelegate(self._hover_delegate)
+        self.entered.connect(self._on_item_entered)
+        self._hover_delegate.edit_requested.connect(self._on_hover_edit_clicked)
+        self._hover_delegate.delete_requested.connect(self._on_hover_delete_clicked)
 
         # --- context menu ---
         self.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -170,26 +182,229 @@ class LauncherTreeView(QTreeView):
         logger.info("LauncherTreeView initialized")
 
     # =================================================
-    # Engine (唯一の実行入口)
+    # Hover handling
     # =================================================
-    def _engine_exec(self, op: str, **kwargs):
-        logger.info("[ENGINE] %s %s", op, kwargs)
-        EXCEL_RECORDABLE_OPS = {
-            "select_cell",
-            "set_cell_value",
-            "move_cell",
-            "copy",
-            "paste",
+    def _on_item_entered(self, idx: QModelIndex):
+        try:
+            if idx and idx.isValid():
+                self._hover_delegate.set_hover_index(idx)
+            else:
+                self._hover_delegate.clear_hover_index()
+            self.viewport().update()
+        except Exception as e:
+            logger.error("[Hover] entered handler failed: %s", e, exc_info=True)
+
+    def leaveEvent(self, event):
+        try:
+            self._hover_delegate.clear_hover_index()
+            self.viewport().update()
+        except Exception as e:
+            logger.error("[Hover] leaveEvent failed: %s", e, exc_info=True)
+        super().leaveEvent(event)
+
+    def _on_hover_edit_clicked(self, idx: QModelIndex):
+        try:
+            if not idx or not idx.isValid():
+                return
+            tag = idx.data(ROLE_TAG)
+            if not isinstance(tag, NodeTag):
+                return
+
+            # sheet は編集禁止
+            if tag.kind == "sheet":
+                logger.info("[Hover] edit ignored (sheet)")
+                return
+
+            logger.info("[Hover] edit start kind=%s text=%s", tag.kind, str(idx.data()))
+            self._set_single_selection(idx)
+            self.edit(idx)
+
+        except Exception as e:
+            logger.error("[Hover] edit clicked failed: %s", e, exc_info=True)
+
+    def _on_hover_delete_clicked(self, idx: QModelIndex):
+        try:
+            if not idx or not idx.isValid():
+                return
+
+            tag = idx.data(ROLE_TAG)
+            if not isinstance(tag, NodeTag):
+                return
+
+            # sheet は削除禁止（安全）
+            if tag.kind == "sheet":
+                logger.info("[Hover] delete ignored (sheet)")
+                return
+
+            item = self._model.itemFromIndex(idx)
+            if item is None:
+                return
+
+            name = item.text()
+            if tag.kind == "folder":
+                msg = f"グループ「{name}」を削除しますか？\n（配下のノードも削除されます）"
+            elif tag.kind == "file":
+                msg = f"ファイル「{name}」をツリーから削除しますか？\n（Excelファイル自体は削除しません）"
+            else:
+                msg = f"「{name}」を削除しますか？"
+
+            ret = QMessageBox.question(
+                self,
+                "Remove",
+                msg,
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if ret != QMessageBox.Yes:
+                logger.info("[Hover] delete canceled by user name=%s", name)
+                return
+
+            logger.info("[Hover] delete confirmed kind=%s name=%s", tag.kind, name)
+            self._remove_item_by_index(idx)
+
+        except Exception as e:
+            logger.error("[Hover] delete clicked failed: %s", e, exc_info=True)
+
+    def _remove_item_by_index(self, idx: QModelIndex):
+        try:
+            if not idx or not idx.isValid():
+                return
+            item = self._model.itemFromIndex(idx)
+            if item is None:
+                return
+
+            parent = item.parent()
+            if parent is None:
+                root = self._model.invisibleRootItem()
+                root.removeRow(item.row())
+            else:
+                parent.removeRow(item.row())
+
+            logger.info("[Remove] removed row=%s", idx.row())
+
+        except Exception as e:
+            logger.error("[Remove] remove failed: %s", e, exc_info=True)
+
+    # =================================================
+    # Project Export / Import
+    # =================================================
+    def export_project(self) -> Dict[str, Any]:
+        logger.info("[Project] export start")
+        root = self._model.invisibleRootItem()
+        groups: List[Dict[str, Any]] = []
+        for r in range(root.rowCount()):
+            groups.append(self._export_item_recursive(root.child(r)))
+        out = {
+            "version": 1,
+            "groups": groups,
+        }
+        logger.info("[Project] export completed groups=%s", len(groups))
+        return out
+
+    def _export_item_recursive(self, item: QStandardItem) -> Dict[str, Any]:
+        tag = item.data(ROLE_TAG)
+        tag_dict = None
+        if isinstance(tag, NodeTag):
+            try:
+                tag_dict = tag.to_dict()
+            except Exception as e:
+                logger.error("[Project] tag.to_dict failed: %s", e, exc_info=True)
+                tag_dict = {
+                    "kind": getattr(tag, "kind", ""),
+                    "path": getattr(tag, "path", ""),
+                    "sheet": getattr(tag, "sheet", ""),
+                }
+
+        node = {
+            "text": item.text(),
+            "tag": tag_dict,
+            "children": [],
         }
 
-        # --- record (Excel操作のみ) ---
-        if op in EXCEL_RECORDABLE_OPS:
+        for r in range(item.rowCount()):
+            node["children"].append(self._export_item_recursive(item.child(r)))
+
+        return node
+
+    def import_project(self, data: Dict[str, Any]) -> None:
+        logger.info("[Project] import start")
+        if not isinstance(data, dict):
+            raise ValueError("project data is not dict")
+
+        self._model.clear()
+        self._model.setHorizontalHeaderLabels([""])
+
+        groups = data.get("groups", [])
+        if not isinstance(groups, list):
+            raise ValueError("project.groups is not list")
+
+        for g in groups:
+            it = self._import_item_recursive(g)
+            self._model.appendRow(it)
+            self.expand(it.index())
+
+        logger.info("[Project] import completed groups=%s", len(groups))
+
+    def _import_item_recursive(self, node: Dict[str, Any]) -> QStandardItem:
+        if not isinstance(node, dict):
+            raise ValueError("project node is not dict")
+
+        text = str(node.get("text", ""))
+        tag_data = node.get("tag", None)
+
+        tag: NodeTag
+        if isinstance(tag_data, dict):
             try:
-                self._macro.record(op, **kwargs)
+                tag = NodeTag.from_dict(tag_data)
+            except Exception as e:
+                logger.error("[Project] NodeTag.from_dict failed: %s", e, exc_info=True)
+                kind = str(tag_data.get("kind", "folder"))
+                path = str(tag_data.get("path", ""))
+                sheet = str(tag_data.get("sheet", ""))
+                tag = NodeTag(kind, path, sheet)
+        else:
+            tag = NodeTag("folder", "")
+
+        it = self._create_item(text, tag)
+
+        children = node.get("children", [])
+        if isinstance(children, list):
+            for ch in children:
+                it.appendRow(self._import_item_recursive(ch))
+
+        if isinstance(tag, NodeTag) and tag.kind == "file":
+            try:
+                self._engine_exec("open_book", path=tag.path)
+            except Exception as e:
+                logger.error("[Project] open_book failed: %s", e, exc_info=True)
+
+        return it
+
+    # =================================================
+    # Engine (唯一の実行入口)
+    # =================================================
+    def _engine_exec(self, op: str, source: Optional[str] = None, **kwargs):
+        """
+        source:
+          - "inspector" : ★ マクロ記録対象
+          - "macro"     : マクロ再生（記録しない）
+          - None        : 通常UI操作（記録しない）
+        """
+        logger.info("[ENGINE] %s source=%s %s", op, source, kwargs)
+
+        # =================================================
+        # ★ Macro record : Inspector ONLY
+        # =================================================
+        if source == "inspector":
+            try:
+                if self._macro.is_recording():
+                    self._macro.record(op, **kwargs)
             except Exception as e:
                 logger.error("macro record failed: %s", e)
 
-        # --- execute ---
+        # =================================================
+        # Execute
+        # =================================================
         if op == "open_book":
             self._excel.request_open(kwargs["path"])
 
@@ -212,7 +427,8 @@ class LauncherTreeView(QTreeView):
 
         elif op == "set_cell_value":
             self._excel.request_set_cell_value(
-                kwargs["cell"], kwargs.get("value", "")
+                kwargs.get("cell", "*"),
+                kwargs.get("value", ""),
             )
 
         elif op == "move_cell":
@@ -220,14 +436,44 @@ class LauncherTreeView(QTreeView):
                 kwargs["direction"], kwargs.get("step", 1)
             )
 
+        elif op == "move_edge":
+            self._excel.request_move_edge(kwargs["direction"])
+
+        elif op == "select_move":
+            self._excel.request_select_move(kwargs["direction"])
+
+        elif op == "select_edge":
+            self._excel.request_select_edge(kwargs["direction"])
+
         elif op == "copy":
             self._excel.request_copy()
 
         elif op == "paste":
             self._excel.request_paste()
 
+        elif op == "cut":
+            self._excel.request_cut()
+
+        elif op == "undo":
+            self._excel.request_undo()
+
+        elif op == "redo":
+            self._excel.request_redo()
+
+        elif op == "select_all":
+            self._excel.request_select_all()
+
+        elif op == "fill_down":
+            self._excel.request_fill_down()
+
+        elif op == "fill_right":
+            self._excel.request_fill_right()
+
+        elif op == "get_active_context":
+            return self._excel.get_active_context()
+
         else:
-            logger.debug("Non-recordable op: %s", op)
+            logger.debug("Non-exec op: %s", op)
 
     # =================================================
     # Key handling
@@ -240,6 +486,17 @@ class LauncherTreeView(QTreeView):
             self._execute_current_selection()
             event.accept()
             return
+
+        # Delete キーで削除（sheet は無視）
+        if key == Qt.Key_Delete and not (mod & (Qt.ControlModifier | Qt.ShiftModifier | Qt.AltModifier)):
+            idx = self.currentIndex()
+            if idx and idx.isValid():
+                tag = idx.data(ROLE_TAG)
+                if isinstance(tag, NodeTag) and tag.kind != "sheet":
+                    logger.info("[Key] Delete pressed -> remove")
+                    self._on_hover_delete_clicked(idx)
+                    event.accept()
+                    return
 
         if (mod & Qt.ControlModifier) and key == Qt.Key_R:
             if self._macro.is_recording():
@@ -275,14 +532,6 @@ class LauncherTreeView(QTreeView):
 
         menu.addSeparator()
         menu.addAction("Inspector (Record Mode)", self._open_inspector)
-
-        menu.addSeparator()
-        if not self._macro.is_recording():
-            menu.addAction("● Macro Start", self.macro_start_dialog)
-        else:
-            menu.addAction("■ Macro Stop", self.macro_stop)
-        menu.addAction("Macro Save...", self.macro_save_dialog)
-        menu.addAction("Macro Clear", self.macro_clear)
 
         sheets = self._get_selected_sheet_tags()
         if len(sheets) == 2:
@@ -574,21 +823,24 @@ class LauncherTreeView(QTreeView):
         self._inspector.activateWindow()
         logger.info("[INSPECTOR] opened")
 
-    def closeEvent(self, event):
-        logger.info("[TreeView] closeEvent -> stopping threads")
+    # =================================================
+    # Shutdown Excel (public)
+    # =================================================
+    def shutdown_excel_on_exit(self):
+        logger.info("[TreeView] shutdown_excel_on_exit begin")
 
-        # Inspector は先に閉じる（任意）
         try:
             if self._inspector:
                 self._inspector.close()
         except Exception as e:
-            logger.error("[TreeView] inspector close failed: %s", e)
+            logger.error("[TreeView] inspector close failed: %s", e, exc_info=True)
 
-        # ExcelWorker を止める（API差異に備えて複数試す）
         try:
             if hasattr(self, "_excel") and self._excel:
-                # まずはユーザー定義stop系を試す
-                if hasattr(self._excel, "stop"):
+                if hasattr(self._excel, "shutdown"):
+                    logger.info("[TreeView] ExcelWorker.shutdown(confirm_save=True)")
+                    self._excel.shutdown(confirm_save=True)
+                elif hasattr(self._excel, "stop"):
                     logger.info("[TreeView] ExcelWorker.stop()")
                     self._excel.stop()
                 elif hasattr(self._excel, "request_stop"):
@@ -598,16 +850,27 @@ class LauncherTreeView(QTreeView):
                     logger.info("[TreeView] ExcelWorker.quit()")
                     self._excel.quit()
 
-                # QThread 標準：quit + wait
                 try:
                     if self._excel.isRunning():
                         logger.info("[TreeView] ExcelWorker is running -> quit/wait")
                         self._excel.quit()
-                        self._excel.wait(2000)
+                        self._excel.wait(3000)
                 except Exception as e2:
-                    logger.error("[TreeView] ExcelWorker wait failed: %s", e2)
+                    logger.error("[TreeView] ExcelWorker wait failed: %s", e2, exc_info=True)
 
         except Exception as e:
-            logger.exception("[TreeView] stop ExcelWorker failed: %s", e)
+            logger.exception("[TreeView] shutdown excel failed: %s", e)
 
+        logger.info("[TreeView] shutdown_excel_on_exit done")
+
+    # =================================================
+    # Close Event
+    # =================================================
+    def closeEvent(self, event):
+        logger.info("[TreeView] closeEvent begin")
+        try:
+            self.shutdown_excel_on_exit()
+        except Exception as e:
+            logger.error("[TreeView] closeEvent shutdown failed: %s", e, exc_info=True)
+        logger.info("[TreeView] closeEvent -> super")
         super().closeEvent(event)
