@@ -881,6 +881,23 @@ class LauncherTreeView(QTreeView):
                 QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows,
             )
 
+    # =================================================
+    # Excel context normalization (前回値比較用)
+    # =================================================
+    def _normalize_excel_ctx(self, ctx: Dict[str, Any]) -> Optional[tuple]:
+        """
+        Excel の状態を「意味的に比較可能な形」に正規化する。
+        ここが一致していれば「実質的に変化なし」。
+        """
+        if not isinstance(ctx, dict):
+            return None
+
+        return (
+            ctx.get("workbook"),
+            ctx.get("sheet"),
+            ctx.get("address"),
+        )
+    
     def _open_inspector(self):
         self._inspector.show()
         self._inspector.raise_()
