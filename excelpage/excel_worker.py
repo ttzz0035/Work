@@ -7,6 +7,7 @@ from typing import Dict, Any, Optional
 
 import pythoncom
 import win32com.client
+
 from PySide6.QtCore import QThread, Signal
 
 from logger import get_logger
@@ -21,12 +22,14 @@ class ExcelWorker(QThread):
     TreeView からの意味操作を受け取り、COM 操作へ変換する。
     - UIスレッドからは request_* でキュー投入のみ
     - worker thread が順番に実行
+    - COM は worker thread だけが触る（重要）
+    - get_active_context は COM に触らずキャッシュを返す（重要）
 
     ★対応:
       open/close/list_sheets/activate/select/set/move/copy/cut/paste
       select_move(Shift+Arrow) / move_edge(Ctrl+Arrow) / select_edge(Ctrl+Shift+Arrow)
       undo/redo/select_all/fill_down/fill_right
-      get_active_context（UIポーリング用）
+      get_active_context（UIポーリング用：キャッシュ返却）
       shutdown/stop/request_stop（終了安全化）
     """
 
@@ -46,7 +49,14 @@ class ExcelWorker(QThread):
         self._cmd_q: queue.Queue = queue.Queue()
         self._books: Dict[str, object] = {}
         self._app = None
-        self._running = True
+
+        self._running: bool = True
+        self._active_path: str = ""
+
+        # ★ UIポーリング用のコンテキストキャッシュ（COMは触らない）
+        self._ctx: Dict[str, str] = {"address": "", "sheet": "", "workbook": ""}
+
+        logger.info("[ExcelWorker] initialized")
 
     # ===============================
     # public API（UI スレッド）
@@ -134,19 +144,30 @@ class ExcelWorker(QThread):
     def shutdown(self, confirm_save: bool = True):
         """
         安全終了（TreeView の closeEvent から呼ばれる想定）
-        confirm_save=True の場合、開いているブックは保存確認を出さず閉じる（DisplayAlerts=False なので基本出ない）
+        confirm_save=True の場合でも現状は SaveChanges=False 運用（事故防止）
         """
         logger.info("[ExcelWorker] shutdown(confirm_save=%s)", confirm_save)
-        # confirm_save は現状「保存せず閉じる」運用に合わせる（事故らない）
-        # 将来必要なら SaveChanges=confirm_save を切り替え可能
         self.request_stop()
+
+    # ===============================
+    # UI polling API（COMに触らない）
+    # ===============================
+    def get_active_context(self) -> Dict[str, str]:
+        """
+        Inspector が UIスレッドから呼ぶ想定。
+        ★COMに触ると死ぬので、キャッシュを返すだけ。
+        """
+        try:
+            return dict(self._ctx)
+        except Exception:
+            return {}
 
     # ===============================
     # worker thread
     # ===============================
     def run(self):
         pythoncom.CoInitialize()
-        logger.info("[ExcelWorker] thread started")
+        logger.info("[ExcelWorker] thread started (COM initialized)")
 
         try:
             while self._running:
@@ -232,7 +253,7 @@ class ExcelWorker(QThread):
                 logger.error("[ExcelWorker] shutdown failed: %s", e, exc_info=True)
 
             pythoncom.CoUninitialize()
-            logger.info("[ExcelWorker] thread stopped")
+            logger.info("[ExcelWorker] thread stopped (COM uninitialized)")
 
     # ===============================
     # internal helpers
@@ -240,56 +261,95 @@ class ExcelWorker(QThread):
     def _ensure_app(self):
         if self._app:
             return
-        logger.info("[ExcelWorker] Dispatch Excel.Application")
-        self._app = win32com.client.Dispatch("Excel.Application")
+        logger.info("[ExcelWorker] DispatchEx Excel.Application")
+        # ★ DispatchEx の方が他Excelインスタンスと分離できて安定しやすい
+        self._app = win32com.client.DispatchEx("Excel.Application")
         self._app.Visible = True
         self._app.DisplayAlerts = False
 
-    def _active_book(self):
+    def _try_fix_active_book(self) -> Optional[object]:
+        """
+        ActiveWorkbook が取れない/None の時に復旧を試みる。
+        """
         if not self._app:
             return None
+
         try:
-            return self._app.ActiveWorkbook
+            wb = self._app.ActiveWorkbook
+            if wb is not None:
+                return wb
+        except Exception:
+            wb = None
+
+        if self._active_path and self._active_path in self._books:
+            try:
+                self._books[self._active_path].Activate()
+                return self._books[self._active_path]
+            except Exception:
+                return None
+
+        # 何も無ければ最後の1冊を Activate
+        try:
+            if self._books:
+                any_path = next(iter(self._books.keys()))
+                self._books[any_path].Activate()
+                self._active_path = any_path
+                return self._books[any_path]
         except Exception:
             return None
 
-    def _emit_active_cell(self):
-        try:
-            if not self._app:
-                return
-            cell = self._app.ActiveCell.Address
-            self.active_cell_changed.emit(cell)
-        except Exception:
-            pass
+        return None
 
-    def get_active_context(self) -> Dict[str, str]:
+    def _active_book(self) -> Optional[object]:
+        if not self._app:
+            return None
+        wb = self._try_fix_active_book()
+        return wb
+
+    def _update_context_cache(self):
         """
-        UI からポーリングされる想定（Inspector）
+        ★ worker thread 内でのみ COM に触って ctx を更新する
         """
         try:
             if not self._app:
-                return {}
+                self._ctx = {"address": "", "sheet": "", "workbook": ""}
+                return
+
             addr = ""
             sheet = ""
             book = ""
+
             try:
-                if self._app.ActiveCell is not None:
-                    addr = str(self._app.ActiveCell.Address)
+                ac = self._app.ActiveCell
+                if ac is not None:
+                    addr = str(ac.Address)
             except Exception:
                 addr = ""
+
             try:
-                if self._app.ActiveSheet is not None:
-                    sheet = str(self._app.ActiveSheet.Name)
+                sh = self._app.ActiveSheet
+                if sh is not None:
+                    sheet = str(sh.Name)
             except Exception:
                 sheet = ""
+
             try:
-                if self._app.ActiveWorkbook is not None:
-                    book = str(self._app.ActiveWorkbook.Name)
+                wb = self._app.ActiveWorkbook
+                if wb is not None:
+                    book = str(wb.Name)
             except Exception:
                 book = ""
-            return {"address": addr, "sheet": sheet, "workbook": book}
-        except Exception:
-            return {}
+
+            self._ctx = {"address": addr, "sheet": sheet, "workbook": book}
+
+            if addr:
+                try:
+                    self.active_cell_changed.emit(addr)
+                except Exception:
+                    pass
+
+        except Exception as e:
+            logger.error("[ExcelWorker] update_context_cache failed: %s", e, exc_info=True)
 
     # ===============================
     # Excel ops
@@ -298,15 +358,32 @@ class ExcelWorker(QThread):
         try:
             if path in self._books:
                 logger.info("[ExcelWorker] open ignored (already opened) path=%s", path)
+                self._active_path = path
+                try:
+                    self._books[path].Activate()
+                except Exception:
+                    pass
+                self._update_context_cache()
                 return
+
             if not os.path.exists(path):
                 logger.info("[ExcelWorker] open ignored (not exists) path=%s", path)
                 return
+
             self._ensure_app()
             logger.info("[ExcelWorker] open path=%s", path)
+
             wb = self._app.Workbooks.Open(path)
             self._books[path] = wb
-            self._emit_active_cell()
+            self._active_path = path
+
+            try:
+                wb.Activate()
+            except Exception:
+                pass
+
+            self._update_context_cache()
+
         except Exception as e:
             logger.error("[ExcelWorker] open failed: %s", e, exc_info=True)
 
@@ -316,6 +393,12 @@ class ExcelWorker(QThread):
             if wb:
                 logger.info("[ExcelWorker] close path=%s", path)
                 wb.Close(SaveChanges=False)
+
+            if self._active_path == path:
+                self._active_path = ""
+
+            self._update_context_cache()
+
         except Exception as e:
             logger.error("[ExcelWorker] close failed: %s", e, exc_info=True)
 
@@ -335,7 +418,8 @@ class ExcelWorker(QThread):
             if wb:
                 logger.info("[ExcelWorker] activate_book path=%s", path)
                 wb.Activate()
-                self._emit_active_cell()
+                self._active_path = path
+                self._update_context_cache()
         except Exception as e:
             logger.error("[ExcelWorker] activate_book failed: %s", e, exc_info=True)
 
@@ -344,47 +428,63 @@ class ExcelWorker(QThread):
             wb = self._books.get(path)
             if wb:
                 logger.info("[ExcelWorker] activate_sheet path=%s sheet=%s", path, sheet)
+                wb.Activate()
+                self._active_path = path
                 wb.Worksheets(sheet).Activate()
-                self._emit_active_cell()
+                self._update_context_cache()
         except Exception as e:
             logger.error("[ExcelWorker] activate_sheet failed: %s", e, exc_info=True)
 
     def _select_cell(self, cell: str):
         try:
             wb = self._active_book()
-            if wb:
-                logger.info("[ExcelWorker] select_cell %s", cell)
-                wb.Application.Range(cell).Select()
-                self._emit_active_cell()
+            if not wb:
+                logger.info("[ExcelWorker] select_cell ignored (no active book) cell=%s", cell)
+                return
+
+            app = self._app
+            logger.info("[ExcelWorker] select_cell %s", cell)
+            app.Range(cell).Select()
+            self._update_context_cache()
+
         except Exception as e:
             logger.error("[ExcelWorker] select_cell failed: %s", e, exc_info=True)
 
     def _select_range(self, anchor: str, active: str):
+        """
+        ※ 現状は anchor -> 現在ActiveCell へ Extend（Tree側でanchor管理）
+        """
         try:
             wb = self._active_book()
             if not wb:
                 return
+            app = self._app
+
             logger.info("[ExcelWorker] select_range anchor=%s active=%s", anchor, active)
-            app = wb.Application
             app.Range(anchor).Select()
-            # Extend は ActiveCell を基準に伸びるので、実質 anchor->現在のActive を伸ばす
-            # TreeView/Inspector 側が anchor を管理する想定
             app.Selection.Extend(app.ActiveCell)
-            self._emit_active_cell()
+            self._update_context_cache()
+
         except Exception as e:
             logger.error("[ExcelWorker] select_range failed: %s", e, exc_info=True)
 
     def _set_cell_value(self, cell: str, value):
         try:
             wb = self._active_book()
-            if wb:
-                logger.info("[ExcelWorker] set_cell_value cell=%s value=%s", cell, value)
-                app = wb.Application
-                if cell == "*":
-                    app.Selection.Value = value
-                else:
-                    app.Range(cell).Value = value
-                self._emit_active_cell()
+            if not wb:
+                logger.info("[ExcelWorker] set_cell_value ignored (no active book)")
+                return
+
+            app = self._app
+            logger.info("[ExcelWorker] set_cell_value cell=%s value=%s", cell, value)
+
+            if cell == "*":
+                app.Selection.Value = value
+            else:
+                app.Range(cell).Value = value
+
+            self._update_context_cache()
+
         except Exception as e:
             logger.error("[ExcelWorker] set_cell_value failed: %s", e, exc_info=True)
 
@@ -392,17 +492,21 @@ class ExcelWorker(QThread):
         try:
             wb = self._active_book()
             if not wb:
+                logger.info("[ExcelWorker] move_cell ignored (no active book)")
                 return
-            app = wb.Application
+
+            app = self._app
             dx, dy = {
                 "up": (-step, 0),
                 "down": (step, 0),
                 "left": (0, -step),
                 "right": (0, step),
             }[direction]
+
             logger.info("[ExcelWorker] move_cell dir=%s step=%s", direction, step)
             app.ActiveCell.Offset(dx, dy).Select()
-            self._emit_active_cell()
+            self._update_context_cache()
+
         except Exception as e:
             logger.error("[ExcelWorker] move_cell failed: %s", e, exc_info=True)
 
@@ -413,17 +517,21 @@ class ExcelWorker(QThread):
         try:
             wb = self._active_book()
             if not wb:
+                logger.info("[ExcelWorker] select_move ignored (no active book)")
                 return
-            app = wb.Application
+
+            app = self._app
             dx, dy = {
                 "up": (-1, 0),
                 "down": (1, 0),
                 "left": (0, -1),
                 "right": (0, 1),
             }[direction]
+
             logger.info("[ExcelWorker] select_move dir=%s", direction)
             app.Selection.Extend(app.ActiveCell.Offset(dx, dy))
-            self._emit_active_cell()
+            self._update_context_cache()
+
         except Exception as e:
             logger.error("[ExcelWorker] select_move failed: %s", e, exc_info=True)
 
@@ -434,11 +542,14 @@ class ExcelWorker(QThread):
         try:
             wb = self._active_book()
             if not wb:
+                logger.info("[ExcelWorker] move_edge ignored (no active book)")
                 return
-            app = wb.Application
+
+            app = self._app
             logger.info("[ExcelWorker] move_edge dir=%s", direction)
             app.ActiveCell.End(self._XL_DIR[direction]).Select()
-            self._emit_active_cell()
+            self._update_context_cache()
+
         except Exception as e:
             logger.error("[ExcelWorker] move_edge failed: %s", e, exc_info=True)
 
@@ -449,48 +560,68 @@ class ExcelWorker(QThread):
         try:
             wb = self._active_book()
             if not wb:
+                logger.info("[ExcelWorker] select_edge ignored (no active book)")
                 return
-            app = wb.Application
+
+            app = self._app
             logger.info("[ExcelWorker] select_edge dir=%s", direction)
             app.Selection.Extend(app.ActiveCell.End(self._XL_DIR[direction]))
-            self._emit_active_cell()
+            self._update_context_cache()
+
         except Exception as e:
             logger.error("[ExcelWorker] select_edge failed: %s", e, exc_info=True)
 
     def _copy(self):
         try:
             wb = self._active_book()
-            if wb:
-                logger.info("[ExcelWorker] copy")
-                wb.Application.Selection.Copy()
+            if not wb:
+                logger.info("[ExcelWorker] copy ignored (no active book)")
+                return
+
+            logger.info("[ExcelWorker] copy")
+            self._app.Selection.Copy()
+
         except Exception as e:
             logger.error("[ExcelWorker] copy failed: %s", e, exc_info=True)
 
     def _cut(self):
         try:
             wb = self._active_book()
-            if wb:
-                logger.info("[ExcelWorker] cut")
-                wb.Application.Selection.Cut()
+            if not wb:
+                logger.info("[ExcelWorker] cut ignored (no active book)")
+                return
+
+            logger.info("[ExcelWorker] cut")
+            self._app.Selection.Cut()
+
         except Exception as e:
             logger.error("[ExcelWorker] cut failed: %s", e, exc_info=True)
 
     def _paste(self):
         try:
             wb = self._active_book()
-            if wb:
-                logger.info("[ExcelWorker] paste")
-                wb.Application.ActiveSheet.Paste()
+            if not wb:
+                logger.info("[ExcelWorker] paste ignored (no active book)")
+                return
+
+            logger.info("[ExcelWorker] paste")
+            self._app.ActiveSheet.Paste()
+            self._update_context_cache()
+
         except Exception as e:
             logger.error("[ExcelWorker] paste failed: %s", e, exc_info=True)
 
     def _undo(self):
         try:
             wb = self._active_book()
-            if wb:
-                logger.info("[ExcelWorker] undo")
-                wb.Application.Undo()
-                self._emit_active_cell()
+            if not wb:
+                logger.info("[ExcelWorker] undo ignored (no active book)")
+                return
+
+            logger.info("[ExcelWorker] undo")
+            self._app.Undo()
+            self._update_context_cache()
+
         except Exception as e:
             logger.error("[ExcelWorker] undo failed: %s", e, exc_info=True)
 
@@ -500,41 +631,56 @@ class ExcelWorker(QThread):
         """
         try:
             wb = self._active_book()
-            if wb:
-                logger.info("[ExcelWorker] redo")
-                # Ctrl+Y
-                wb.Application.SendKeys("^y")
-                self._emit_active_cell()
+            if not wb:
+                logger.info("[ExcelWorker] redo ignored (no active book)")
+                return
+
+            logger.info("[ExcelWorker] redo (SendKeys ^y)")
+            self._app.SendKeys("^y")
+            self._update_context_cache()
+
         except Exception as e:
             logger.error("[ExcelWorker] redo failed: %s", e, exc_info=True)
 
     def _select_all(self):
         try:
             wb = self._active_book()
-            if wb:
-                logger.info("[ExcelWorker] select_all")
-                wb.Application.Cells.Select()
-                self._emit_active_cell()
+            if not wb:
+                logger.info("[ExcelWorker] select_all ignored (no active book)")
+                return
+
+            logger.info("[ExcelWorker] select_all")
+            self._app.Cells.Select()
+            self._update_context_cache()
+
         except Exception as e:
             logger.error("[ExcelWorker] select_all failed: %s", e, exc_info=True)
 
     def _fill_down(self):
         try:
             wb = self._active_book()
-            if wb:
-                logger.info("[ExcelWorker] fill_down")
-                wb.Application.Selection.FillDown()
-                self._emit_active_cell()
+            if not wb:
+                logger.info("[ExcelWorker] fill_down ignored (no active book)")
+                return
+
+            logger.info("[ExcelWorker] fill_down")
+            self._app.Selection.FillDown()
+            self._update_context_cache()
+
         except Exception as e:
             logger.error("[ExcelWorker] fill_down failed: %s", e, exc_info=True)
 
     def _fill_right(self):
         try:
             wb = self._active_book()
-            if wb:
-                logger.info("[ExcelWorker] fill_right")
-                wb.Application.Selection.FillRight()
-                self._emit_active_cell()
+            if not wb:
+                logger.info("[ExcelWorker] fill_right ignored (no active book)")
+                return
+
+            logger.info("[ExcelWorker] fill_right")
+            self._app.Selection.FillRight()
+            self._update_context_cache()
+
         except Exception as e:
             logger.error("[ExcelWorker] fill_right failed: %s", e, exc_info=True)
 
@@ -543,6 +689,7 @@ class ExcelWorker(QThread):
     # ===============================
     def _shutdown(self):
         logger.info("[ExcelWorker] _shutdown begin")
+
         # ブックを閉じる
         for p, wb in list(self._books.items()):
             try:
@@ -552,6 +699,7 @@ class ExcelWorker(QThread):
                 logger.error("[ExcelWorker] close book failed path=%s err=%s", p, e, exc_info=True)
 
         self._books.clear()
+        self._active_path = ""
 
         # Excel app 終了
         try:
@@ -562,4 +710,6 @@ class ExcelWorker(QThread):
             logger.error("[ExcelWorker] app quit failed: %s", e, exc_info=True)
 
         self._app = None
+        self._ctx = {"address": "", "sheet": "", "workbook": ""}
+
         logger.info("[ExcelWorker] _shutdown done")
