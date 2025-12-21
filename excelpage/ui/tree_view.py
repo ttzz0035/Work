@@ -70,6 +70,8 @@ class DiffThread(QThread):
         super().__init__()
         self._req = req
         self._append_log = append_log
+        # --- Excel context cache (前回状態保持) ---
+        self._last_excel_ctx_norm: Optional[tuple] = None
 
     def run(self):
         try:
@@ -514,7 +516,30 @@ class LauncherTreeView(QTreeView):
             self._excel.request_fill_right()
 
         elif op == "get_active_context":
-            return self._excel.get_active_context()
+            ctx = self._excel.get_active_context()
+            if not isinstance(ctx, dict):
+                return None
+
+            norm = self._normalize_excel_ctx(ctx)
+            if norm is None:
+                return None
+
+            # ★ 前回状態と完全一致 → 変化なし（無視）
+            if norm == self._last_excel_ctx_norm:
+                logger.debug(
+                    "[ENGINE] get_active_context ignored (no change) %s",
+                    norm,
+                )
+                return None
+
+            # ★ 実質的な変化があった場合のみ更新
+            self._last_excel_ctx_norm = norm
+
+            logger.info(
+                "[ENGINE] get_active_context changed %s",
+                norm,
+            )
+            return ctx
 
         else:
             logger.debug("Non-exec op: %s", op)
