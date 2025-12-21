@@ -1,4 +1,10 @@
+# main.py
+from __future__ import annotations
+
 import sys
+import json
+import os
+from typing import Dict, Any
 
 from PySide6.QtWidgets import (
     QApplication,
@@ -16,7 +22,6 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer
 
 from ui.tree_view import LauncherTreeView
-from services.project_io import save_project, load_project
 from logger import get_logger
 
 logger = get_logger("App")
@@ -25,14 +30,22 @@ logger = get_logger("App")
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+
         self.setWindowTitle("Excel Workspace Launcher")
         self.resize(520, 860)
 
-        self._project_path: str | None = None
-
+        # =========================
+        # UI
+        # =========================
         root = QWidget()
         self.setCentralWidget(root)
 
+        layout = QVBoxLayout(root)
+        layout.setContentsMargins(12, 10, 12, 12)
+
+        # -------------------------
+        # Header
+        # -------------------------
         header = QWidget()
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(12, 10, 12, 10)
@@ -49,116 +62,168 @@ class MainWindow(QMainWindow):
         plus_menu = QMenu(self.btn_plus)
         act_add_files = plus_menu.addAction("Add Files...")
         act_add_folder = plus_menu.addAction("Add Folder...")
+        act_load_project = plus_menu.addAction("Load Project...")
         self.btn_plus.setMenu(plus_menu)
+
         header_layout.addWidget(self.btn_plus)
 
-        self.btn_menu = QToolButton()
-        self.btn_menu.setText("≡")
-        self.btn_menu.setPopupMode(QToolButton.InstantPopup)
-
-        app_menu = QMenu(self.btn_menu)
-        act_load_project = app_menu.addAction("Load Project...")
-        act_save_project = app_menu.addAction("Save Project...")
-        self.btn_menu.setMenu(app_menu)
-        header_layout.addWidget(self.btn_menu)
-
-        self.tree = LauncherTreeView()
-
-        layout = QVBoxLayout(root)
-        layout.setContentsMargins(12, 10, 12, 12)
         layout.addWidget(header)
+
+        # -------------------------
+        # Tree
+        # -------------------------
+        self.tree = LauncherTreeView(self)
         layout.addWidget(self.tree, 1)
 
+        # -------------------------
+        # Wire
+        # -------------------------
         act_add_files.triggered.connect(self.tree.add_files_dialog)
         act_add_folder.triggered.connect(self.tree.add_folder_dialog)
-        act_save_project.triggered.connect(self.save_project_dialog)
         act_load_project.triggered.connect(self.load_project_dialog)
+
+        # -------------------------
+        # 起動時プログレス
+        # -------------------------
+        self._startup_progress: QProgressDialog | None = None
+        self._startup_total: int = 0
+        self._startup_done: int = 0
+        self._startup_books: set[str] = set()
+
+        # Excel 起動進捗を監視
+        excel = self.tree._excel
+        if hasattr(excel, "book_closed"):
+            excel.book_closed.connect(self._on_startup_book_event)
+        if hasattr(excel, "book_close_failed"):
+            excel.book_close_failed.connect(self._on_startup_book_event)
 
         logger.info("MainWindow initialized")
 
-    def save_project_dialog(self):
-        path, _ = QFileDialog.getSaveFileName(
+    # =================================================
+    # Startup progress
+    # =================================================
+    def show_startup_progress(self, total_books: int):
+        logger.info("[Startup] progress start total=%s", total_books)
+
+        self._startup_total = total_books
+        self._startup_done = 0
+        self._startup_books.clear()
+
+        self._startup_progress = QProgressDialog(
+            "Starting Excel workspace...",
+            None,
+            0,
+            max(1, total_books),
             self,
-            "Save Project",
-            self._project_path or "",
-            "Project (*.json)",
         )
-        if not path:
-            logger.info("[Project] save canceled")
+        self._startup_progress.setWindowTitle("Starting")
+        self._startup_progress.setWindowModality(Qt.ApplicationModal)
+        self._startup_progress.setCancelButton(None)
+        self._startup_progress.setMinimumDuration(0)
+        self._startup_progress.show()
+
+    def _on_startup_book_event(self, path: str, *_):
+        """
+        ExcelWorker からの通知で進捗を進める
+        """
+        if not self._startup_progress:
             return
 
-        try:
-            save_project(path, self.tree)
-            self._project_path = path
-            logger.info("[Project] saved path=%s", path)
-        except Exception as e:
-            logger.exception("[Project] save failed: %s", e)
-            QMessageBox.critical(self, "Save Project", f"保存に失敗しました:\n{e}")
+        ap = os.path.abspath(path)
+        if ap in self._startup_books:
+            return
 
+        self._startup_books.add(ap)
+        self._startup_done += 1
+
+        try:
+            self._startup_progress.setValue(self._startup_done)
+            self._startup_progress.setLabelText(
+                f"Starting Excel workspace... {self._startup_done}/{self._startup_total}"
+            )
+        except Exception:
+            pass
+
+        logger.info(
+            "[Startup] book ready %s (%s/%s)",
+            ap,
+            self._startup_done,
+            self._startup_total,
+        )
+
+        if self._startup_done >= self._startup_total:
+            try:
+                self._startup_progress.close()
+            except Exception:
+                pass
+            self._startup_progress = None
+            logger.info("[Startup] progress finished")
+
+    # =================================================
+    # Project load
+    # =================================================
     def load_project_dialog(self):
         path, _ = QFileDialog.getOpenFileName(
             self,
             "Load Project",
             "",
-            "Project (*.json)",
+            "Project JSON (*.json)",
         )
         if not path:
-            logger.info("[Project] load canceled")
             return
 
         try:
-            load_project(path, self.tree)
-            self._project_path = path
-            logger.info("[Project] loaded path=%s", path)
+            with open(path, "r", encoding="utf-8") as f:
+                data: Dict[str, Any] = json.load(f)
         except Exception as e:
-            logger.exception("[Project] load failed: %s", e)
-            QMessageBox.critical(self, "Load Project", f"読み込みに失敗しました:\n{e}")
+            QMessageBox.critical(self, "Project", f"読み込み失敗:\n{e}")
+            return
 
+        # 起動対象ブック数を事前に数える
+        total_books = self._count_books(data)
+        self.show_startup_progress(total_books)
+
+        try:
+            self.tree.import_project(data)
+        except Exception as e:
+            logger.error("[Project] import failed: %s", e, exc_info=True)
+            QMessageBox.critical(self, "Project", f"ロード失敗:\n{e}")
+            if self._startup_progress:
+                self._startup_progress.close()
+                self._startup_progress = None
+
+    def _count_books(self, node: Dict[str, Any]) -> int:
+        cnt = 0
+        if not isinstance(node, dict):
+            return 0
+
+        tag = node.get("tag", {})
+        if isinstance(tag, dict) and tag.get("kind") == "file":
+            cnt += 1
+
+        for ch in node.get("children", []):
+            cnt += self._count_books(ch)
+
+        return cnt
+
+    # =================================================
+    # Close
+    # =================================================
     def closeEvent(self, event):
-        logger.info("[MainWindow] closeEvent begin")
-
-        ret = QMessageBox.question(
-            self,
-            "終了確認",
-            "プロジェクトを保存しますか？",
-            QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
-            QMessageBox.Yes,
-        )
-
-        if ret == QMessageBox.Cancel:
-            logger.info("[MainWindow] close canceled")
-            event.ignore()
-            return
-
-        if ret == QMessageBox.Yes:
-            self.save_project_dialog()
-
+        logger.info("[MainWindow] closeEvent")
         try:
-            if self.tree:
-                self.tree.shutdown_excel_on_exit()
+            self.tree.shutdown_excel_on_exit()
         except Exception as e:
-            logger.exception("[MainWindow] shutdown excel failed: %s", e)
-
-        logger.info("[MainWindow] closeEvent -> super")
+            logger.error("[MainWindow] shutdown failed: %s", e, exc_info=True)
         super().closeEvent(event)
-
-
-def show_main_window(app: QApplication, progress: QProgressDialog):
-    try:
-        progress.close()
-        logger.info("Startup progress closed")
-    except Exception as e:
-        logger.error("Startup progress close failed: %s", e, exc_info=True)
-
-    win = MainWindow()
-    win.show()
-    app._main_window = win
-    logger.info("Main window shown")
 
 
 def main():
     app = QApplication(sys.argv)
 
+    # -------------------------
+    # Style
+    # -------------------------
     app.setStyleSheet(
         """
         QMainWindow { background: #111; }
@@ -198,21 +263,11 @@ def main():
         """
     )
 
-    progress = QProgressDialog(
-        "Starting application...",
-        None,
-        0,
-        0,
-    )
-    progress.setWindowTitle("Please wait")
-    progress.setWindowModality(Qt.ApplicationModal)
-    progress.setCancelButton(None)
-    progress.setMinimumDuration(0)
-    progress.show()
+    win = MainWindow()
+    win.show()
 
-    logger.info("Startup progress shown")
-
-    QTimer.singleShot(100, lambda: show_main_window(app, progress))
+    # GC 防止
+    app._main_window = win
 
     sys.exit(app.exec())
 
