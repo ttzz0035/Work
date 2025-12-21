@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import json
+import time
 from typing import List, Tuple, Dict, Optional, Any
 
 from PySide6.QtWidgets import (
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QDialog,
     QInputDialog,
+    QProgressDialog,
 )
 from PySide6.QtGui import QStandardItemModel, QStandardItem
 from PySide6.QtCore import (
@@ -151,6 +153,15 @@ class LauncherTreeView(QTreeView):
         # --- Excel worker ---
         self._excel = ExcelWorker()
         self._excel.sheets_ready.connect(self._on_sheets_ready)
+
+        # ★ 追加：終了時 close 完了を待つ
+        if hasattr(self._excel, "book_closed"):
+            self._excel.book_closed.connect(self._on_exit_book_closed)
+        if hasattr(self._excel, "book_close_failed"):
+            self._excel.book_close_failed.connect(self._on_exit_book_close_failed)
+        if hasattr(self._excel, "quit_finished"):
+            self._excel.quit_finished.connect(self._on_exit_quit_finished)
+
         self._excel.start()
 
         self.selectionModel().selectionChanged.connect(self._on_selection_changed)
@@ -181,6 +192,15 @@ class LauncherTreeView(QTreeView):
 
         # --- macro play ---
         self._macro_play_thread = None
+
+        # --- exit state ---
+        self._is_shutting_down: bool = False
+        self._exit_total: int = 0
+        self._exit_done: int = 0
+        self._exit_closed: set[str] = set()
+        self._exit_failed: set[str] = set()
+        self._exit_quit_done: bool = False
+        self._exit_progress: Optional[QProgressDialog] = None
 
         logger.info("LauncherTreeView initialized")
 
@@ -261,6 +281,14 @@ class LauncherTreeView(QTreeView):
             if ret != QMessageBox.Yes:
                 logger.info("[Hover] delete canceled by user name=%s", name)
                 return
+
+            # ★ file を消すなら Excel も閉じる（エンジン残留対策）
+            if isinstance(tag, NodeTag) and tag.kind == "file":
+                try:
+                    logger.info("[Hover] request close_book before remove path=%s", tag.path)
+                    self._engine_exec("close_book", path=tag.path)
+                except Exception as e:
+                    logger.error("[Hover] close_book failed: %s", e, exc_info=True)
 
             logger.info("[Hover] delete confirmed kind=%s name=%s", tag.kind, name)
             self._remove_item_by_index(idx)
@@ -407,7 +435,6 @@ class LauncherTreeView(QTreeView):
                     except Exception as e:
                         logger.error("[MACRO] get_active_context failed: %s", e)
 
-                    # ★ 文脈を付与（上書きしない）
                     record_kwargs = dict(kwargs)
                     if "workbook" not in record_kwargs:
                         record_kwargs["workbook"] = ctx.get("workbook", "")
@@ -504,7 +531,6 @@ class LauncherTreeView(QTreeView):
             event.accept()
             return
 
-        # Delete キーで削除（sheet は無視）
         if key == Qt.Key_Delete and not (mod & (Qt.ControlModifier | Qt.ShiftModifier | Qt.AltModifier)):
             idx = self.currentIndex()
             if idx and idx.isValid():
@@ -540,7 +566,6 @@ class LauncherTreeView(QTreeView):
 
         menu = QMenu(self)
 
-        # ★ グループ追加
         menu.addAction("Add Group...", self.add_group_dialog)
 
         menu.addSeparator()
@@ -645,7 +670,6 @@ class LauncherTreeView(QTreeView):
             self._engine_exec("activate_sheet", path=tag.path, sheet=tag.sheet)
 
         else:
-            # folder/group 選択は Excel 操作しない
             pass
 
     def _on_selection_changed(self, *_):
@@ -656,7 +680,6 @@ class LauncherTreeView(QTreeView):
         if not item:
             return
 
-        # clear sheet children
         for r in reversed(range(item.rowCount())):
             ch = item.child(r)
             tag = ch.data(ROLE_TAG)
@@ -745,7 +768,6 @@ class LauncherTreeView(QTreeView):
             text=default_name,
         )
 
-        # 入力なければフォルダ名
         group_name = (name or "").strip() if ok else ""
         if not group_name:
             group_name = default_name
@@ -766,7 +788,6 @@ class LauncherTreeView(QTreeView):
         self._engine_exec("open_book", path=ap)
 
     def _add_folder(self, folder: str, group_name: str):
-        # ★ 仮想グループ（OSパスは保持しない方針）
         root = self._create_item(group_name, NodeTag("folder", ""))
         self._model.appendRow(root)
 
@@ -778,7 +799,6 @@ class LauncherTreeView(QTreeView):
         self.expand(root.index())
         logger.info("[GROUP] folder imported folder=%s -> group=%s", folder, group_name)
 
-        # Macroに残す（危険操作じゃない）
         try:
             self._macro.record("import_folder", folder=folder, group=group_name)
         except Exception:
@@ -795,7 +815,6 @@ class LauncherTreeView(QTreeView):
         it = QStandardItem(text)
         it.setData(tag, ROLE_TAG)
 
-        # ★ 編集可否：sheet は不可、それ以外は可
         if isinstance(tag, NodeTag) and tag.kind == "sheet":
             it.setEditable(False)
         else:
@@ -844,45 +863,165 @@ class LauncherTreeView(QTreeView):
         logger.info("[INSPECTOR] opened")
 
     # =================================================
+    # Exit progress callbacks
+    # =================================================
+    def _on_exit_book_closed(self, path: str):
+        if not self._is_shutting_down:
+            return
+        ap = _abspath(path)
+        if ap in self._exit_closed or ap in self._exit_failed:
+            return
+        self._exit_closed.add(ap)
+        self._exit_done += 1
+        logger.info("[EXIT] book_closed %s (%s/%s)", ap, self._exit_done, self._exit_total)
+        self._update_exit_progress()
+
+    def _on_exit_book_close_failed(self, path: str, msg: str):
+        if not self._is_shutting_down:
+            return
+        ap = _abspath(path)
+        if ap in self._exit_closed or ap in self._exit_failed:
+            return
+        self._exit_failed.add(ap)
+        self._exit_done += 1
+        logger.error("[EXIT] book_close_failed %s err=%s (%s/%s)", ap, msg, self._exit_done, self._exit_total)
+        self._update_exit_progress()
+
+    def _on_exit_quit_finished(self):
+        if not self._is_shutting_down:
+            return
+        self._exit_quit_done = True
+        logger.info("[EXIT] quit_finished received")
+
+    def _update_exit_progress(self):
+        if not self._exit_progress:
+            return
+        try:
+            self._exit_progress.setValue(self._exit_done)
+            self._exit_progress.setLabelText(f"Closing Excel books... {self._exit_done}/{self._exit_total}")
+        except Exception:
+            pass
+
+    # =================================================
     # Shutdown Excel (public)
     # =================================================
+    def _collect_tree_book_paths(self) -> List[str]:
+        out: List[str] = []
+        root = self._model.invisibleRootItem()
+        stack = [root.child(r) for r in range(root.rowCount())]
+        while stack:
+            it = stack.pop()
+            tag = it.data(ROLE_TAG)
+            if isinstance(tag, NodeTag) and tag.kind == "file":
+                out.append(_abspath(tag.path))
+            for r in range(it.rowCount()):
+                stack.append(it.child(r))
+
+        seen = set()
+        uniq: List[str] = []
+        for p in out:
+            if p and p not in seen:
+                seen.add(p)
+                uniq.append(p)
+        return uniq
+
     def shutdown_excel_on_exit(self):
-        logger.info("[TreeView] shutdown_excel_on_exit begin")
+        """
+        ✅ 要求どおり：
+        終了時は「ツリー上のブック」を先に閉じて、その後 ExcelWorker を shutdown してエンジンを残さない。
+        """
+        if self._is_shutting_down:
+            logger.info("[EXIT] shutdown already in progress -> skip")
+            return
+
+        self._is_shutting_down = True
+        logger.info("[EXIT] shutdown_excel_on_exit begin")
 
         try:
             if self._inspector:
                 self._inspector.close()
         except Exception as e:
-            logger.error("[TreeView] inspector close failed: %s", e, exc_info=True)
+            logger.error("[EXIT] inspector close failed: %s", e, exc_info=True)
 
+        paths = self._collect_tree_book_paths()
+        self._exit_total = len(paths)
+        self._exit_done = 0
+        self._exit_closed = set()
+        self._exit_failed = set()
+        self._exit_quit_done = False
+
+        if self._exit_total > 0:
+            self._exit_progress = QProgressDialog(
+                "Closing Excel books...",
+                None,
+                0,
+                self._exit_total,
+                self,
+            )
+            self._exit_progress.setWindowTitle("Closing")
+            self._exit_progress.setWindowModality(Qt.ApplicationModal)
+            self._exit_progress.setCancelButton(None)
+            self._exit_progress.setMinimumDuration(0)
+            self._exit_progress.show()
+            self._update_exit_progress()
+
+        # 1) ツリー上のブックを全部 close 要求
+        for p in paths:
+            try:
+                logger.info("[EXIT] request_close path=%s", p)
+                self._excel.request_close(p)
+            except Exception as e:
+                logger.error("[EXIT] request_close failed path=%s err=%s", p, e, exc_info=True)
+                self._exit_done += 1
+                self._exit_failed.add(p)
+                self._update_exit_progress()
+
+        # 2) close 完了を待つ（Signal で進捗が進む）
+        start = time.time()
+        timeout_sec = 10.0
+        while self._exit_done < self._exit_total:
+            QApplication.processEvents()
+            if time.time() - start > timeout_sec:
+                logger.error("[EXIT] close wait timeout done=%s total=%s", self._exit_done, self._exit_total)
+                break
+            time.sleep(0.02)
+
+        # 3) 最後に ExcelWorker を shutdown（Quit + COM破棄）
         try:
-            if hasattr(self, "_excel") and self._excel:
-                if hasattr(self._excel, "shutdown"):
-                    logger.info("[TreeView] ExcelWorker.shutdown(confirm_save=True)")
-                    self._excel.shutdown(confirm_save=True)
-                elif hasattr(self._excel, "stop"):
-                    logger.info("[TreeView] ExcelWorker.stop()")
-                    self._excel.stop()
-                elif hasattr(self._excel, "request_stop"):
-                    logger.info("[TreeView] ExcelWorker.request_stop()")
-                    self._excel.request_stop()
-                elif hasattr(self._excel, "quit"):
-                    logger.info("[TreeView] ExcelWorker.quit()")
-                    self._excel.quit()
-
-                try:
-                    if self._excel.isRunning():
-                        logger.info("[TreeView] ExcelWorker is running -> quit/wait")
-                        self._excel.quit()
-                        self._excel.wait(3000)
-                except Exception as e2:
-                    logger.error("[TreeView] ExcelWorker wait failed: %s", e2, exc_info=True)
-
+            logger.info("[EXIT] ExcelWorker.shutdown(confirm_save=True)")
+            self._excel.shutdown(confirm_save=True)
         except Exception as e:
-            logger.exception("[TreeView] shutdown excel failed: %s", e)
+            logger.error("[EXIT] ExcelWorker.shutdown failed: %s", e, exc_info=True)
 
-        logger.info("[TreeView] shutdown_excel_on_exit done")
+        # 4) thread 終了待ち（エンジン残留防止）
+        wait_start = time.time()
+        wait_timeout_sec = 10.0
+        while True:
+            QApplication.processEvents()
+            try:
+                if not self._excel.isRunning():
+                    break
+            except Exception:
+                break
 
+            if time.time() - wait_start > wait_timeout_sec:
+                logger.error("[EXIT] ExcelWorker wait timeout")
+                break
+            time.sleep(0.02)
+
+        if self._exit_progress:
+            try:
+                self._exit_progress.close()
+            except Exception:
+                pass
+            self._exit_progress = None
+
+        logger.info("[EXIT] shutdown_excel_on_exit done closed=%s failed=%s", len(self._exit_closed), len(self._exit_failed))
+        self._is_shutting_down = False
+
+    # =================================================
+    # Macro play
+    # =================================================
     def macro_play_dialog(self):
         logger.info(
             "[MACRO] play requested running=%s",
@@ -932,6 +1071,7 @@ class LauncherTreeView(QTreeView):
         logger.info("[TreeView] closeEvent -> super")
         super().closeEvent(event)
 
+
 class _MacroPlayThread(QThread):
     def __init__(self, tree: "LauncherTreeView", macro: Dict[str, Any]):
         super().__init__()
@@ -942,29 +1082,20 @@ class _MacroPlayThread(QThread):
         self._log = get_logger("MacroPlayThread")
         self._log.info(
             "[INIT] thread created isRunning=%s",
-            
             self.isRunning(),
         )
 
-        # Qt finished シグナル監視
         self.finished.connect(self._on_finished)
 
-    # -------------------------------------------------
-    # public
-    # -------------------------------------------------
     def stop(self):
         self._stop = True
         self._log.info(
             "[STOP] stop requested isRunning=%s",
-            
             self.isRunning(),
         )
 
-    # -------------------------------------------------
-    # thread entry
-    # -------------------------------------------------
     def run(self):
-        self._log.info( "[RUN] start")
+        self._log.info("[RUN] start")
 
         steps = self._macro.get("steps", [])
         self._log.info("[RUN] steps count=%s", len(steps))
@@ -1006,12 +1137,8 @@ class _MacroPlayThread(QThread):
 
         self._log.info("[RUN] end stopped=%s", self._stop)
 
-    # -------------------------------------------------
-    # Qt lifecycle
-    # -------------------------------------------------
     def _on_finished(self):
         self._log.info(
             "[FINISHED] thread finished isRunning=%s",
-            
             self.isRunning(),
         )

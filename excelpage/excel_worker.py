@@ -36,6 +36,11 @@ class ExcelWorker(QThread):
     sheets_ready = Signal(str, list)
     active_cell_changed = Signal(str)
 
+    # ★ 追加：TreeView 側で「閉じ終わり」を待つための通知
+    book_closed = Signal(str)
+    book_close_failed = Signal(str, str)
+    quit_finished = Signal()
+
     # Excel XlDirection
     _XL_DIR = {
         "up": -4121,     # xlUp
@@ -254,6 +259,10 @@ class ExcelWorker(QThread):
 
             pythoncom.CoUninitialize()
             logger.info("[ExcelWorker] thread stopped (COM uninitialized)")
+            try:
+                self.quit_finished.emit()
+            except Exception:
+                pass
 
     # ===============================
     # internal helpers
@@ -288,7 +297,6 @@ class ExcelWorker(QThread):
             except Exception:
                 return None
 
-        # 何も無ければ最後の1冊を Activate
         try:
             if self._books:
                 any_path = next(iter(self._books.keys()))
@@ -399,8 +407,17 @@ class ExcelWorker(QThread):
 
             self._update_context_cache()
 
+            try:
+                self.book_closed.emit(path)
+            except Exception:
+                pass
+
         except Exception as e:
             logger.error("[ExcelWorker] close failed: %s", e, exc_info=True)
+            try:
+                self.book_close_failed.emit(path, str(e))
+            except Exception:
+                pass
 
     def _list_sheets(self, path: str):
         try:
@@ -696,18 +713,24 @@ class ExcelWorker(QThread):
     def _shutdown(self):
         logger.info("[ExcelWorker] _shutdown begin")
 
-        # ブックを閉じる
         for p, wb in list(self._books.items()):
             try:
                 logger.info("[ExcelWorker] closing book path=%s", p)
                 wb.Close(SaveChanges=False)
+                try:
+                    self.book_closed.emit(p)
+                except Exception:
+                    pass
             except Exception as e:
                 logger.error("[ExcelWorker] close book failed path=%s err=%s", p, e, exc_info=True)
+                try:
+                    self.book_close_failed.emit(p, str(e))
+                except Exception:
+                    pass
 
         self._books.clear()
         self._active_path = ""
 
-        # Excel app 終了
         try:
             if self._app:
                 logger.info("[ExcelWorker] app quit")
