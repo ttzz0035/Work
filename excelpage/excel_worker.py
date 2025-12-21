@@ -525,28 +525,18 @@ class ExcelWorker(QThread):
                 logger.info("[ExcelWorker] move_cell ignored (no active book)")
                 return
 
-            app = self._app
-            ac = app.ActiveCell  # ★ 常に ActiveCell 基準
+            before = self._snapshot_ctx_from_com()
 
-            before = str(ac.Address)
+            key = self._SK_ARROW[direction]
 
-            row_off, col_off = {
-                "up": (-step, 0),
-                "down": (step, 0),
-                "left": (0, -step),
-                "right": (0, step),
-            }[direction]
+            # step 回分 SendKeys
+            for _ in range(step):
+                self._app.SendKeys(key)
 
-            target = ac.Offset(row_off, col_off)  # ★ 位置引数のみ
-            after = str(target.Address)
-
-            logger.info(
-                "[ExcelWorker] move_cell %s -> %s dir=%s",
-                before, after, direction
-            )
-
-            target.Select()
             self._update_context_cache()
+            after = dict(self._ctx)
+
+            self._log_before_after("move_cell", before, after, extra=f"dir={direction}")
 
         except Exception as e:
             logger.error(

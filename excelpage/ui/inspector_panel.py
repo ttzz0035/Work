@@ -304,6 +304,13 @@ class InspectorPanel(QWidget):
 
             return
 
+        # ---- Ctrl+Shift (select edge) ----
+        if (mod & Qt.ControlModifier) and (mod & Qt.ShiftModifier):
+            if key in (Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right):
+                self._exec("select_edge", direction=self._dir(key))
+                self._log_add("Select edge (Ctrl+Shift+Arrow)", "#7fd7ff")
+                return
+
         # ---- Ctrl ----
         if mod & Qt.ControlModifier:
             if key == Qt.Key_A:
@@ -328,13 +335,6 @@ class InspectorPanel(QWidget):
             if key in (Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right):
                 self._exec("move_edge", direction=self._dir(key))
                 self._log_add("Move edge (Ctrl+Arrow)", "#aaa")
-                return
-
-        # ---- Ctrl+Shift (select edge) ----
-        if (mod & Qt.ControlModifier) and (mod & Qt.ShiftModifier):
-            if key in (Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right):
-                self._exec("select_edge", direction=self._dir(key))
-                self._log_add("Select edge (Ctrl+Shift+Arrow)", "#7fd7ff")
                 return
 
         # ---- Shift (select move) ----
