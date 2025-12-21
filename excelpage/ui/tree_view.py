@@ -516,30 +516,7 @@ class LauncherTreeView(QTreeView):
             self._excel.request_fill_right()
 
         elif op == "get_active_context":
-            ctx = self._excel.get_active_context()
-            if not isinstance(ctx, dict):
-                return None
-
-            norm = self._normalize_excel_ctx(ctx)
-            if norm is None:
-                return None
-
-            # ★ 前回状態と完全一致 → 変化なし（無視）
-            if norm == self._last_excel_ctx_norm:
-                logger.debug(
-                    "[ENGINE] get_active_context ignored (no change) %s",
-                    norm,
-                )
-                return None
-
-            # ★ 実質的な変化があった場合のみ更新
-            self._last_excel_ctx_norm = norm
-
-            logger.info(
-                "[ENGINE] get_active_context changed %s",
-                norm,
-            )
-            return ctx
+            return self._excel.get_active_context()
 
         else:
             logger.debug("Non-exec op: %s", op)
@@ -881,23 +858,6 @@ class LauncherTreeView(QTreeView):
                 QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows,
             )
 
-    # =================================================
-    # Excel context normalization (前回値比較用)
-    # =================================================
-    def _normalize_excel_ctx(self, ctx: Dict[str, Any]) -> Optional[tuple]:
-        """
-        Excel の状態を「意味的に比較可能な形」に正規化する。
-        ここが一致していれば「実質的に変化なし」。
-        """
-        if not isinstance(ctx, dict):
-            return None
-
-        return (
-            ctx.get("workbook"),
-            ctx.get("sheet"),
-            ctx.get("address"),
-        )
-    
     def _open_inspector(self):
         self._inspector.show()
         self._inspector.raise_()

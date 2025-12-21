@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QSizePolicy,
 )
-from PySide6.QtCore import Qt, QEvent, QTimer
+from PySide6.QtCore import Qt, QEvent, QTimer, QTime  # ★追加: 重複抑止の時刻取得
 
 try:
     from logger import get_logger
@@ -117,6 +117,15 @@ class InspectorPanel(QWidget):
         self._edit_mode = False
         self._last_ctx: Optional[str] = None
         self._active_cell: Optional[str] = None
+
+        # =================================================
+        # ★重複送信ガード（追加のみ）
+        # - Qt が同一 KeyPress を二重に届けるケースの抑止
+        # - AutoRepeat とは別経路の重複を止める
+        # =================================================
+        self._last_exec_sig = None  # type: Optional[tuple]
+        self._last_exec_ms = 0
+        self._dup_guard_ms = 60  # ここだけ調整すればOK（まずは60ms）
 
         # ---- window
         self.setWindowTitle("Excel Inspector")
@@ -507,7 +516,26 @@ class InspectorPanel(QWidget):
         }[key]
 
     def _exec(self, op: str, **kw):
+        # ★重複送信対策: 同一op+同一引数が短時間に連続したら捨てる
         if self._tree:
+            try:
+                now_ms = QTime.currentTime().msecsSinceStartOfDay()
+
+                # signature: (op, sorted kw items)
+                sig = (op, tuple(sorted(kw.items())))
+
+                if self._last_exec_sig == sig and (now_ms - self._last_exec_ms) < self._dup_guard_ms:
+                    logger.debug(
+                        "[Inspector] suppress duplicate op=%s kw=%s dt=%sms",
+                        op, kw, (now_ms - self._last_exec_ms)
+                    )
+                    return
+
+                self._last_exec_sig = sig
+                self._last_exec_ms = now_ms
+            except Exception as e:
+                logger.error("[Inspector] duplicate guard failed: %s", e, exc_info=True)
+
             self._tree._engine_exec(op, source="inspector", **kw)
 
     def _exec_and_log(self, op: str, msg: str, color: str):
