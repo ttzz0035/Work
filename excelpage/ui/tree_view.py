@@ -151,8 +151,11 @@ class LauncherTreeView(QTreeView):
         self._macro = get_macro_recorder()
 
         # --- inspector ---
-        self._inspector = InspectorPanel(self)
+        self._inspector = InspectorPanel()
+        self._inspector.set_tree(self)
         self._inspector.hide()
+
+        self._excel.active_cell_changed.connect(self._inspector.set_current_cell)
 
         # --- busy overlay ---
         self._busy_reason: Optional[str] = None
@@ -171,12 +174,20 @@ class LauncherTreeView(QTreeView):
     # =================================================
     def _engine_exec(self, op: str, **kwargs):
         logger.info("[ENGINE] %s %s", op, kwargs)
+        EXCEL_RECORDABLE_OPS = {
+            "select_cell",
+            "set_cell_value",
+            "move_cell",
+            "copy",
+            "paste",
+        }
 
-        # --- record ---
-        try:
-            self._macro.record(op, **kwargs)
-        except Exception as e:
-            logger.error("macro record failed: %s", e)
+        # --- record (Excel操作のみ) ---
+        if op in EXCEL_RECORDABLE_OPS:
+            try:
+                self._macro.record(op, **kwargs)
+            except Exception as e:
+                logger.error("macro record failed: %s", e)
 
         # --- execute ---
         if op == "open_book":
@@ -204,8 +215,19 @@ class LauncherTreeView(QTreeView):
                 kwargs["cell"], kwargs.get("value", "")
             )
 
+        elif op == "move_cell":
+            self._excel.request_move_cell(
+                kwargs["direction"], kwargs.get("step", 1)
+            )
+
+        elif op == "copy":
+            self._excel.request_copy()
+
+        elif op == "paste":
+            self._excel.request_paste()
+
         else:
-            logger.error("Unknown engine op: %s", op)
+            logger.debug("Non-recordable op: %s", op)
 
     # =================================================
     # Key handling
@@ -551,3 +573,41 @@ class LauncherTreeView(QTreeView):
         self._inspector.raise_()
         self._inspector.activateWindow()
         logger.info("[INSPECTOR] opened")
+
+    def closeEvent(self, event):
+        logger.info("[TreeView] closeEvent -> stopping threads")
+
+        # Inspector は先に閉じる（任意）
+        try:
+            if self._inspector:
+                self._inspector.close()
+        except Exception as e:
+            logger.error("[TreeView] inspector close failed: %s", e)
+
+        # ExcelWorker を止める（API差異に備えて複数試す）
+        try:
+            if hasattr(self, "_excel") and self._excel:
+                # まずはユーザー定義stop系を試す
+                if hasattr(self._excel, "stop"):
+                    logger.info("[TreeView] ExcelWorker.stop()")
+                    self._excel.stop()
+                elif hasattr(self._excel, "request_stop"):
+                    logger.info("[TreeView] ExcelWorker.request_stop()")
+                    self._excel.request_stop()
+                elif hasattr(self._excel, "quit"):
+                    logger.info("[TreeView] ExcelWorker.quit()")
+                    self._excel.quit()
+
+                # QThread 標準：quit + wait
+                try:
+                    if self._excel.isRunning():
+                        logger.info("[TreeView] ExcelWorker is running -> quit/wait")
+                        self._excel.quit()
+                        self._excel.wait(2000)
+                except Exception as e2:
+                    logger.error("[TreeView] ExcelWorker wait failed: %s", e2)
+
+        except Exception as e:
+            logger.exception("[TreeView] stop ExcelWorker failed: %s", e)
+
+        super().closeEvent(event)
