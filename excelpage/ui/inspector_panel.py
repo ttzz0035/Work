@@ -15,8 +15,75 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QEvent, QTimer
 
-from logger import get_logger
-from services.macro_recorder import get_macro_recorder
+try:
+    from logger import get_logger
+except ModuleNotFoundError:
+    import logging
+
+    def get_logger(name: str):
+        logger = logging.getLogger(name)
+        if not logger.handlers:
+            logger.setLevel(logging.DEBUG)
+            h = logging.StreamHandler()
+            fmt = logging.Formatter(
+                "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+            )
+            h.setFormatter(fmt)
+            logger.addHandler(h)
+            logger.propagate = False
+        return logger
+
+# =================================================
+# MacroRecorder import absorb (run-as-script safe)
+# =================================================
+try:
+    from services.macro_recorder import get_macro_recorder
+except ModuleNotFoundError:
+    import json
+    import datetime
+
+    class _DummyMacroRecorder:
+        """
+        Fallback MacroRecorder for direct execution.
+        - API compatible (minimum)
+        - No external dependency
+        """
+
+        def __init__(self):
+            self._recording = False
+            self._steps = []
+
+        def is_recording(self) -> bool:
+            return self._recording
+
+        def start(self):
+            self._recording = True
+
+        def stop(self):
+            self._recording = False
+
+        def steps_count(self) -> int:
+            return len(self._steps)
+
+        def save_json(self, path: str):
+            data = {
+                "version": 1,
+                "name": "dummy-macro",
+                "created_at": datetime.datetime.now().isoformat(),
+                "steps": self._steps,
+            }
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+
+    _DUMMY_MACRO = _DummyMacroRecorder()
+
+    def get_macro_recorder():
+        """
+        Fallback getter.
+        Same signature as services.macro_recorder.get_macro_recorder
+        """
+        return _DUMMY_MACRO
+
 
 logger = get_logger("Inspector")
 
@@ -450,3 +517,136 @@ class InspectorPanel(QWidget):
     def _log_add(self, msg: str, color="#ddd"):
         self._log_buf.appendleft(f'<span style="color:{color}">▸ {msg}</span>')
         self.log.setHtml("<br>".join(self._log_buf))
+
+
+# =================================================
+# Validation (dev only / same file)
+# =================================================
+if __name__ == "__main__":
+
+    from PySide6.QtWidgets import QApplication
+    from PySide6.QtTest import QTest
+    from PySide6.QtGui import QKeyEvent
+    from PySide6.QtCore import QEvent
+    import sys
+
+    class _FakeTree:
+        def __init__(self):
+            self.calls = []
+
+        def _engine_exec(self, op: str, **kw):
+            self.calls.append((op, dict(kw)))
+            logger.info("[VALIDATE] engine_exec op=%s kw=%s", op, kw)
+            if op == "get_active_context":
+                return {"address": "$A$1", "sheet": "Sheet1"}
+            return None
+
+        def clear(self):
+            self.calls.clear()
+
+        def last(self):
+            if not self.calls:
+                raise AssertionError("engine_exec が呼ばれていません")
+            return self.calls[-1]
+
+    def _assert_last(tree, op: str, **expect):
+        got_op, got_kw = tree.last()
+        assert got_op == op, f"op mismatch: {got_op} != {op}"
+        for k, v in expect.items():
+            assert got_kw.get(k) == v, f"{k} mismatch: {got_kw.get(k)} != {v}"
+
+    def validate_keys(panel: InspectorPanel, tree: _FakeTree):
+        logger.info("=== VALIDATE: key mapping ===")
+
+        tree.clear()
+        QTest.keyClick(panel, Qt.Key_Down)
+        _assert_last(tree, "move_cell", direction="down", step=1, source="inspector")
+
+        tree.clear()
+        QTest.keyClick(panel, Qt.Key_Right, Qt.ShiftModifier)
+        _assert_last(tree, "select_move", direction="right", source="inspector")
+
+        tree.clear()
+        QTest.keyClick(panel, Qt.Key_Left, Qt.ControlModifier)
+        _assert_last(tree, "move_edge", direction="left", source="inspector")
+
+        tree.clear()
+        QTest.keyClick(panel, Qt.Key_Up, Qt.ControlModifier | Qt.ShiftModifier)
+        _assert_last(tree, "select_edge", direction="up", source="inspector")
+
+        logger.info("=== VALIDATE: key mapping OK ===")
+
+    def validate_edit(panel: InspectorPanel, tree: _FakeTree):
+        logger.info("=== VALIDATE: edit mode ===")
+
+        tree.clear()
+        QTest.keyClick(panel, Qt.Key_F2)
+        QTest.keyClicks(panel.editor, "abc")
+        QTest.keyClick(panel.editor, Qt.Key_Return)
+
+        _assert_last(
+            tree,
+            "set_cell_value",
+            cell="*",
+            value="abc",
+            source="inspector",
+        )
+
+        assert panel._edit_mode is False
+        assert panel.editor.isReadOnly() is True
+
+        logger.info("=== VALIDATE: edit mode OK ===")
+
+    def validate_autorepeat(panel: InspectorPanel):
+        logger.info("=== VALIDATE: autorepeat ignore ===")
+
+        tree: _FakeTree = panel._tree  # type: ignore
+        tree.clear()
+
+        ev = QKeyEvent(
+            QEvent.KeyPress,
+            Qt.Key_Down,
+            Qt.NoModifier,
+            "",
+            True,   # autoRepeat
+            1,
+        )
+        QApplication.sendEvent(panel, ev)
+        QTest.qWait(10)
+
+        assert len(tree.calls) == 0, "AutoRepeat で engine_exec が呼ばれています"
+
+        logger.info("=== VALIDATE: autorepeat OK ===")
+
+    def validate_user_input(panel: InspectorPanel):
+        logger.info("=== VALIDATE: user key input ===")
+        logger.info("↓ 今から実キーを押してください ↓")
+        logger.info("  Arrow / Shift+Arrow / Ctrl+Arrow / F2 → Enter")
+        logger.info("  （5秒以内）")
+
+        # 人が触る時間を与えるだけ
+        QTest.qWait(10000)
+
+        logger.info("=== VALIDATE: user key input DONE ===")
+
+    # -----------------------------
+    # run validation
+    # -----------------------------
+    app = QApplication(sys.argv)
+
+    panel = InspectorPanel()
+    fake_tree = _FakeTree()
+    panel.set_tree(fake_tree)
+    panel._poll.stop()  # ノイズ防止
+    panel.show()
+
+    QTest.qWaitForWindowExposed(panel)
+    panel.activateWindow()
+    panel.setFocus()
+
+    validate_keys(panel, fake_tree)
+    validate_edit(panel, fake_tree)
+    validate_autorepeat(panel)
+    validate_user_input(panel)
+
+    logger.info("=== ALL VALIDATION PASSED ===")
