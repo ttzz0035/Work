@@ -1,6 +1,8 @@
+# ui/inspector_panel.py
 from __future__ import annotations
 
 import time
+import traceback
 from collections import deque
 from typing import Optional, Any, Dict
 
@@ -18,8 +20,12 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QEvent, QTimer
 from PySide6.QtGui import QKeyEvent
 
+# =================================================
+# Logger (project Logger preferred)
+# =================================================
 try:
     from Logger import Logger
+
     logger = Logger(
         name="Inspector",
         log_file_path="logs/app.log",
@@ -29,15 +35,17 @@ except ModuleNotFoundError:
     import logging
 
     def get_logger(name: str):
-        logger = logging.getLogger(name)
-        if not logger.handlers:
-            logger.setLevel(logging.DEBUG)
+        lg = logging.getLogger(name)
+        if not lg.handlers:
+            lg.setLevel(logging.DEBUG)
             h = logging.StreamHandler()
             fmt = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
             h.setFormatter(fmt)
-            logger.addHandler(h)
-            logger.propagate = False
-        return logger
+            lg.addHandler(h)
+            lg.propagate = False
+        return lg
+
+    logger = get_logger("Inspector")
 
 # =================================================
 # MacroRecorder import absorb (run-as-script safe)
@@ -157,7 +165,6 @@ def focus_snapshot() -> str:
 
 def safe_native_info(e: QKeyEvent) -> str:
     try:
-        # Windowsなら nativeVirtualKey / nativeScanCode が見える
         return f"native_vk={e.nativeVirtualKey()} native_sc={e.nativeScanCode()} native_mod={e.nativeModifiers()}"
     except Exception:
         return "native=(n/a)"
@@ -373,7 +380,11 @@ class InspectorPanel(QWidget):
             "text": e.text(),
             "t_ms": now_ms(),
         }
-        logger.info("[KEY] %s %s %s %s", kv_compact(info), safe_native_info(e), focus_snapshot(), "")
+        logger.info(
+            f"[KEY] {kv_compact(info)} "
+            f"{safe_native_info(e)} "
+            f"{focus_snapshot()}"
+        )
 
     def _log_exec(self, op: str, trace_id: int, kw: Dict[str, Any]):
         base = {
@@ -382,7 +393,7 @@ class InspectorPanel(QWidget):
             "t_ms": now_ms(),
             "edit_mode": self._edit_mode,
         }
-        logger.info("[EXEC] %s kw=%s %s", kv_compact(base), kw, focus_snapshot())
+        logger.info(f"[EXEC] {kv_compact(base)} kw={kw} {focus_snapshot()}")
 
     # =================================================
     # Focus helpers
@@ -391,7 +402,7 @@ class InspectorPanel(QWidget):
         try:
             self.setFocus(Qt.ActiveWindowFocusReason)
         except Exception as e:
-            logger.error("[Inspector] focus failed: %s", e, exc_info=True)
+            logger.error(f"[Inspector] focus failed: {e}\n{traceback.format_exc()}")
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -399,7 +410,7 @@ class InspectorPanel(QWidget):
             self.raise_()
             self.activateWindow()
         except Exception as e:
-            logger.error("[Inspector] showEvent activate failed: %s", e, exc_info=True)
+            logger.error(f"[Inspector] showEvent activate failed: {e}\n{traceback.format_exc()}")
         self._focus_inspector()
 
     def mousePressEvent(self, event):
@@ -407,7 +418,7 @@ class InspectorPanel(QWidget):
             if not self._edit_mode:
                 self._focus_inspector()
         except Exception as e:
-            logger.error("[Inspector] mousePress focus failed: %s", e, exc_info=True)
+            logger.error(f"[Inspector] mousePress focus failed: {e}\n{traceback.format_exc()}")
         super().mousePressEvent(event)
 
     # =================================================
@@ -443,7 +454,7 @@ class InspectorPanel(QWidget):
 
             # 編集中は editor に任せる（既存仕様）
             if self._edit_mode and obj is self.editor:
-                logger.info("[KEY] trace=%s pass_to_editor=True", trace_id)
+                logger.info(f"[KEY] trace={trace_id} pass_to_editor=True")
                 return False
 
             # ★ ここでは EXEC しない
@@ -462,7 +473,7 @@ class InspectorPanel(QWidget):
 
             # 編集中は editor に任せる
             if self._edit_mode and obj is self.editor:
-                logger.info("[KEY] trace=%s pass_to_editor=True", trace_id)
+                logger.info(f"[KEY] trace={trace_id} pass_to_editor=True")
                 return False
 
             self._handle_key(e, trace_id)
@@ -499,7 +510,7 @@ class InspectorPanel(QWidget):
             self.editor.setFocus(Qt.OtherFocusReason)
             self.editor.selectAll()
             self._log_add("Edit (F2)", "#7fd7ff")
-            logger.info("[MODE] trace=%s edit_mode=True", trace_id)
+            logger.info(f"[MODE] trace={trace_id} edit_mode=True")
             return
 
         # ---- Editing ----
@@ -514,7 +525,7 @@ class InspectorPanel(QWidget):
                 self.editor.setReadOnly(True)
                 self.editor.setFocusPolicy(Qt.NoFocus)
                 self._focus_inspector()
-                logger.info("[MODE] trace=%s edit_mode=False commit=True", trace_id)
+                logger.info(f"[MODE] trace={trace_id} edit_mode=False commit=True")
                 return
 
             if key == Qt.Key_Escape:
@@ -524,10 +535,10 @@ class InspectorPanel(QWidget):
                 self.editor.setFocusPolicy(Qt.NoFocus)
                 self._log_add("Edit cancel (Esc)", "#aaa")
                 self._focus_inspector()
-                logger.info("[MODE] trace=%s edit_mode=False cancel=True", trace_id)
+                logger.info(f"[MODE] trace={trace_id} edit_mode=False cancel=True")
                 return
 
-            logger.info("[MODE] trace=%s editing_ignore key=%s", trace_id, key_to_name(key))
+            logger.info(f"[MODE] trace={trace_id} editing_ignore key={key_to_name(key)}")
             return
 
         # ---- Ctrl+Shift (select edge) ----
@@ -577,7 +588,9 @@ class InspectorPanel(QWidget):
             self._log_add(f"Move {direction} (Arrow)", "#aaa")
             return
 
-        logger.info("[KEY] trace=%s unhandled key=%s mod=%s", trace_id, key_to_name(key), mod_to_str(mod))
+        logger.info(
+            f"[KEY] trace={trace_id} unhandled key={key_to_name(key)} mod={mod_to_str(mod)}"
+        )
 
     # =================================================
     # Macro
@@ -603,7 +616,7 @@ class InspectorPanel(QWidget):
             except Exception:
                 cnt = 0
 
-        logger.info("[MACRO] save_dialog steps=%s", cnt)
+        logger.info(f"[MACRO] save_dialog steps={cnt}")
 
         if cnt == 0:
             self._log_add("No macro steps (Ctrl+Shift+S)", "#aaa")
@@ -618,9 +631,9 @@ class InspectorPanel(QWidget):
         try:
             self._macro.save_json(path)
             self._log_add(f"Saved macro ({cnt} steps) (Ctrl+Shift+S)", "#7fd7ff")
-            logger.info("[MACRO] saved path=%s steps=%s", path, cnt)
+            logger.info(f"[MACRO] saved path={path} steps={cnt}")
         except Exception as e:
-            logger.exception("macro save failed: %s", e)
+            logger.error(f"[MACRO] save failed: {e}\n{traceback.format_exc()}")
             self._log_add("Macro save failed", "#f66")
 
     # =================================================
@@ -633,11 +646,11 @@ class InspectorPanel(QWidget):
         try:
             ctx = self._tree._engine_exec("get_active_context")
         except Exception as e:
-            logger.error(f"[CTX] get_active_context failed: {e}")
+            logger.error(f"[CTX] get_active_context failed: {e}\n{traceback.format_exc()}")
             return
 
         if not isinstance(ctx, dict):
-            logger.info("[CTX] ignored ctx_type=%s", type(ctx))
+            logger.info(f"[CTX] ignored ctx_type={type(ctx)}")
             return
 
         addr = str(ctx.get("address", "")).replace("$", "")
@@ -667,7 +680,8 @@ class InspectorPanel(QWidget):
         self._last_exec_trace = trace_id
 
         logger.warning(
-            f"[CUT] INSPECTOR_EXEC seq={self._trace_seq} trace={trace_id} op={op} dt={dt}ms kw={kw}")
+            f"[CUT] INSPECTOR_EXEC seq={self._trace_seq} trace={trace_id} op={op} dt={dt}ms kw={kw}"
+        )
 
         if self._tree:
             payload = dict(kw)
@@ -694,7 +708,7 @@ class _FakeTree:
 
     def _engine_exec(self, op: str, **kw):
         self.calls.append((op, dict(kw)))
-        logger.info("[VALIDATE] engine_exec op=%s kw=%s", op, kw)
+        logger.info(f"[VALIDATE] engine_exec op={op} kw={kw}")
         if op == "get_active_context":
             return {"address": "$A$1", "sheet": "Sheet1"}
         return None
