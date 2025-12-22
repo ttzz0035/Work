@@ -211,6 +211,21 @@ class ExcelWorker(QThread):
         logger.warning(f"[CUT] EXCEL_MOVE EXIT after={after}")
 
     # ===============================
+    # UI polling API（COMに触らない）
+    # ===============================
+    def get_active_context(self) -> Dict[str, str]:
+        """
+        Inspector / TreeView から呼ばれる。
+        COMには触らず、キャッシュのみ返す（安全）。
+        """
+        try:
+            logger.debug(f"[CUT] get_active_context return ctx={self._ctx}")
+            return dict(self._ctx)
+        except Exception as e:
+            logger.error(f"[CUT] get_active_context failed err={e}")
+            return {}
+
+    # ===============================
     # shutdown
     # ===============================
     def _shutdown(self):
