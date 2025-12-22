@@ -777,7 +777,7 @@ class LauncherTreeView(QTreeView):
         if not group_name:
             group_name = default_name
 
-        logger.info("[FOLDER] selected=%s group_name=%s", folder, group_name)
+        logger.info(f"[FOLDER] selected={folder} group_name={group_name}")
         self._add_folder(folder, group_name)
 
     def _add_file(self, path: str, parent: Optional[QStandardItem] = None):
@@ -789,7 +789,7 @@ class LauncherTreeView(QTreeView):
 
         (parent or self._model).appendRow(it)
 
-        logger.info("[FILE] add path=%s parent=%s", ap, "yes" if parent else "root")
+        logger.info(f"[FILE] add path={ap} parent={"yes" if parent else "root"}")
         self._engine_exec("open_book", path=ap)
 
     def _add_folder(self, folder: str, group_name: str):
@@ -802,7 +802,7 @@ class LauncherTreeView(QTreeView):
                 self._add_file(full, root)
 
         self.expand(root.index())
-        logger.info("[GROUP] folder imported folder=%s -> group=%s", folder, group_name)
+        logger.info(f"[GROUP] folder imported folder={folder} -> group={group_name}")
 
         try:
             self._macro.record("import_folder", folder=folder, group=group_name)
@@ -889,7 +889,7 @@ class LauncherTreeView(QTreeView):
             return
         self._exit_failed.add(ap)
         self._exit_done += 1
-        logger.error("[EXIT] book_close_failed %s err=%s (%s/%s)", ap, msg, self._exit_done, self._exit_total)
+        logger.error(f"[EXIT] book_close_failed {ap} err={msg} ({self._exit_done}/{self._exit_total})")
         self._update_exit_progress()
 
     def _on_exit_quit_finished(self):

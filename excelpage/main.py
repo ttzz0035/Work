@@ -149,11 +149,7 @@ class MainWindow(QMainWindow):
             pass
 
         logger.info(
-            "[Startup] book ready %s (%s/%s)",
-            ap,
-            self._startup_done,
-            self._startup_total,
-        )
+            f"[Startup] book ready {ap} ({self._startup_done}/{self._startup_total})")
 
         if self._startup_done >= self._startup_total:
             try:
@@ -190,7 +186,7 @@ class MainWindow(QMainWindow):
         try:
             self.tree.import_project(data)
         except Exception as e:
-            logger.error("[Project] import failed: %s", e, exc_info=True)
+            logger.error("[Project] import failed: {e}")
             QMessageBox.critical(self, "Project", f"ロード失敗:\n{e}")
             if self._startup_progress:
                 self._startup_progress.close()
@@ -218,7 +214,7 @@ class MainWindow(QMainWindow):
         try:
             self.tree.shutdown_excel_on_exit()
         except Exception as e:
-            logger.error("[MainWindow] shutdown failed: %s", e, exc_info=True)
+            logger.error(f"[MainWindow] shutdown failed: {e}")
         super().closeEvent(event)
 
 
