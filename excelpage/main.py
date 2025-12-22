@@ -22,9 +22,13 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer
 
 from ui.tree_view import LauncherTreeView
-from logger import get_logger
+from Logger import Logger
+logger = Logger(
+    name="App",
+    log_file_path="logs/app.log",
+    level="DEBUG",
+)
 
-logger = get_logger("App")
 
 
 class MainWindow(QMainWindow):

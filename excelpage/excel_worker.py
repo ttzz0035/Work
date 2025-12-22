@@ -10,10 +10,13 @@ import win32com.client
 
 from PySide6.QtCore import QThread, Signal
 
-from logger import get_logger
+from Logger import Logger
 
-logger = get_logger("ExcelWorker")
-
+logger = Logger(
+    name="ExcelWorker",
+    log_file_path="logs/app.log",
+    level="DEBUG",
+)
 
 class ExcelWorker(QThread):
     """

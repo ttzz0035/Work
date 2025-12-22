@@ -17,10 +17,12 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 
-from logger import get_logger
-
-logger = get_logger("SearchDialog")
-
+from Logger import Logger
+logger = Logger(
+    name="SearchDialog",
+    log_file_path="logs/app.log",
+    level="DEBUG",
+)
 
 class SearchDialog(QDialog):
     """

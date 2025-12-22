@@ -5,10 +5,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Iterable, List
 
-from logger import get_logger
-
-logger = get_logger("CommandLogger")
-
+from Logger import Logger
+logger = Logger(
+    name="CommandLogger",
+    log_file_path="logs/app.log",
+    level="DEBUG",
+)
 
 @dataclass(frozen=True)
 class CommandRecord:

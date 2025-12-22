@@ -30,7 +30,6 @@ from PySide6.QtCore import (
 from models.node_tag import NodeTag
 from models.dto import DiffRequest
 from excel_worker import ExcelWorker
-from logger import get_logger
 
 from ui.diff_dialog import DiffOptionDialog
 from ui.inspector_panel import InspectorPanel
@@ -38,8 +37,12 @@ from services.macro_recorder import get_macro_recorder
 
 from ui.hover_action_delegate import HoverActionDelegate
 
-
-logger = get_logger("TreeView")
+from Logger import Logger
+logger = Logger(
+    name="TreeView",
+    log_file_path="logs/app.log",
+    level="DEBUG",
+)
 
 EXCEL_EXTS = (".xlsx", ".xlsm", ".xls", ".xlsb")
 ROLE_TAG = Qt.ItemDataRole.UserRole + 1
@@ -423,12 +426,7 @@ class LauncherTreeView(QTreeView):
           - "macro"     : マクロ再生（記録しない）
           - None        : 通常UI操作（記録しない）
         """
-        logger.warning(
-            "[CUT][T->E] trace=%s op=%s source=%s",
-            kwargs.get("_trace_id"),
-            op,
-            source,
-        )
+        logger.warning(f"[CUT][T->E] trace={kwargs.get('_trace_id')} op={op} source={source}")
 
         # =================================================
         # ★ Macro record : Inspector ONLY
@@ -1054,13 +1052,11 @@ class LauncherTreeView(QTreeView):
         self._macro_play_thread = _MacroPlayThread(self, data)
         self._macro_play_thread.start()
 
-        logger.info("[MACRO] play start path=%s", path)
+        logger.info("f[MACRO] play start path={path}")
 
     def macro_stop_play(self):
         logger.info(
-            "[MACRO] stop button pressed thread_exists=%s running=%s",
-            bool(self._macro_play_thread),
-            bool(self._macro_play_thread and self._macro_play_thread.isRunning()),
+            f"[MACRO] stop button pressed thread_exists{bool(self._macro_play_thread)} running={bool(self._macro_play_thread and self._macro_play_thread.isRunning())}",
         )
         if self._macro_play_thread:
             self._macro_play_thread.stop()
@@ -1074,7 +1070,7 @@ class LauncherTreeView(QTreeView):
         try:
             self.shutdown_excel_on_exit()
         except Exception as e:
-            logger.error("[TreeView] closeEvent shutdown failed: %s", e, exc_info=True)
+            logger.error(f"[TreeView] closeEvent shutdown failed: {e}")
         logger.info("[TreeView] closeEvent -> super")
         super().closeEvent(event)
 
@@ -1086,7 +1082,7 @@ class _MacroPlayThread(QThread):
         self._macro = macro
         self._stop = False
 
-        self._log = get_logger("MacroPlayThread")
+        self._log = Logger("MacroPlayThread")
         self._log.info(
             "[INIT] thread created isRunning=%s",
             self.isRunning(),
@@ -1105,47 +1101,31 @@ class _MacroPlayThread(QThread):
         self._log.info("[RUN] start")
 
         steps = self._macro.get("steps", [])
-        self._log.info("[RUN] steps count=%s", len(steps))
+        self._log.info(f"[RUN] steps count={len(steps)}")
 
         for i, step in enumerate(steps):
             if self._stop:
                 self._log.warning(
-                    "[RUN] stop flag detected at step=%s",
-                    i,
-                )
+                    f"[RUN] stop flag detected at step={i}")
                 break
 
             op = step.get("op")
             args = step.get("args", {})
 
             self._log.info(
-                "[STEP] idx=%s op=%s args=%s",
-                i,
-                op,
-                args,
-            )
+                f"[STEP] idx={i} op={op} args={args}")
 
             try:
                 self._tree._engine_exec(op, source="macro", **args)
                 self._log.info(
-                    "[STEP] idx=%s op=%s DONE",
-                    i,
-                    op,
-                )
+                    f"[STEP] idx={i} op={op} DONE")
             except Exception as e:
                 self._log.error(
-                    "[STEP] idx=%s FAILED op=%s err=%s",
-                    i,
-                    op,
-                    e,
-                    exc_info=True,
-                )
+                    f"[STEP] idx={i} FAILED op={op} err={e}")
                 break
 
-        self._log.info("[RUN] end stopped=%s", self._stop)
+        self._log.info(f"[RUN] end stopped={self._stop}")
 
     def _on_finished(self):
         self._log.info(
-            "[FINISHED] thread finished isRunning=%s",
-            self.isRunning(),
-        )
+            f"[FINISHED] thread finished isRunning={self.isRunning()}")

@@ -5,9 +5,14 @@ from dataclasses import dataclass, asdict
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from logger import get_logger
+from Logger import Logger
 
-logger = get_logger("MacroRecorder")
+logger = Logger(
+    name="MacroRecorder",
+    log_file_path="logs/app.log",
+    level="DEBUG",
+)
+
 
 
 @dataclass

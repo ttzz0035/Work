@@ -7,9 +7,12 @@ from PySide6.QtGui import QPainter, QFont, QColor
 from PySide6.QtWidgets import QStyledItemDelegate, QStyleOptionViewItem
 
 from models.node_tag import NodeTag
-from logger import get_logger
-
-logger = get_logger("HoverActionDelegate")
+from Logger import Logger
+logger = Logger(
+    name="HoverActionDelegate",
+    log_file_path="logs/app.log",
+    level="DEBUG",
+)
 
 
 class HoverActionDelegate(QStyledItemDelegate):
@@ -36,7 +39,7 @@ class HoverActionDelegate(QStyledItemDelegate):
         self._gap = 6
         self._right_pad = 8
 
-        logger.info("[Delegate] initialized role_tag=%s", role_tag)
+        logger.info(f"[Delegate] initialized role_tag={role_tag}")
 
     # ----------------------------
     # Hover index set/clear

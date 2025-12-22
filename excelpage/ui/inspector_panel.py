@@ -19,7 +19,12 @@ from PySide6.QtCore import Qt, QEvent, QTimer
 from PySide6.QtGui import QKeyEvent
 
 try:
-    from logger import get_logger
+    from Logger import Logger
+    logger = Logger(
+        name="Inspector",
+        log_file_path="logs/app.log",
+        level="DEBUG",
+    )
 except ModuleNotFoundError:
     import logging
 
@@ -84,9 +89,6 @@ except ModuleNotFoundError:
         Same signature as services.macro_recorder.get_macro_recorder
         """
         return _DUMMY_MACRO
-
-
-logger = get_logger("Inspector")
 
 
 # =================================================
@@ -351,7 +353,7 @@ class InspectorPanel(QWidget):
 
         QTimer.singleShot(0, self._focus_inspector)
 
-        logger.info("[Inspector] InspectorPanel ready %s", focus_snapshot())
+        logger.info(f"[Inspector] InspectorPanel ready {focus_snapshot()}")
 
     # =================================================
     # tracing
@@ -413,11 +415,11 @@ class InspectorPanel(QWidget):
     # =================================================
     def set_tree(self, tree):
         self._tree = tree
-        logger.info("[Inspector] set_tree tree=%s", obj_name(tree))
+        logger.info(f"[Inspector] set_tree tree={obj_name(tree)}")
 
     def set_current_cell(self, cell: str):
         self._active_cell = cell
-        logger.info("[Inspector] set_current_cell cell=%s", cell)
+        logger.info(f"[Inspector] set_current_cell cell={cell}")
 
     # =================================================
     # Event filter
@@ -631,7 +633,7 @@ class InspectorPanel(QWidget):
         try:
             ctx = self._tree._engine_exec("get_active_context")
         except Exception as e:
-            logger.error("[CTX] get_active_context failed: %s", e, exc_info=True)
+            logger.error(f"[CTX] get_active_context failed: {e}")
             return
 
         if not isinstance(ctx, dict):
@@ -645,7 +647,7 @@ class InspectorPanel(QWidget):
         if label != self._last_ctx:
             self._last_ctx = label
             self.addr_label.setText(label)
-            logger.info("[CTX] update label=%s ctx=%s", label, ctx)
+            logger.info(f"[CTX] update label={label} ctx={ctx}")
 
     # =================================================
     # Helpers
@@ -665,13 +667,7 @@ class InspectorPanel(QWidget):
         self._last_exec_trace = trace_id
 
         logger.warning(
-            "[CUT] INSPECTOR_EXEC seq=%s trace=%s op=%s dt=%sms kw=%s",
-            self._trace_seq,
-            trace_id,
-            op,
-            dt,
-            kw,
-        )
+            f"[CUT] INSPECTOR_EXEC seq={self._trace_seq} trace={trace_id} op={op} dt={dt}ms kw={kw}")
 
         if self._tree:
             payload = dict(kw)
