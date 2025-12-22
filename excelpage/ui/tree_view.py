@@ -789,7 +789,7 @@ class LauncherTreeView(QTreeView):
 
         (parent or self._model).appendRow(it)
 
-        logger.info(f"[FILE] add path={ap} parent={"yes" if parent else "root"}")
+        logger.info(f"[FILE] add path={ap} parent={'yes' if parent else 'root'}")
         self._engine_exec("open_book", path=ap)
 
     def _add_folder(self, folder: str, group_name: str):
