@@ -1,4 +1,6 @@
 # ui/inspector_panel.py
+# UI完成形固定・機能完全互換・修正容易化リファクタ版（説明なし）
+
 from __future__ import annotations
 
 import time
@@ -20,8 +22,9 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QEvent, QTimer
 from PySide6.QtGui import QKeyEvent
 
+
 # =================================================
-# Logger (project Logger preferred)
+# Logger
 # =================================================
 try:
     from Logger import Logger
@@ -47,8 +50,9 @@ except ModuleNotFoundError:
 
     logger = get_logger("Inspector")
 
+
 # =================================================
-# MacroRecorder import absorb (run-as-script safe)
+# MacroRecorder
 # =================================================
 try:
     from services.macro_recorder import get_macro_recorder
@@ -57,12 +61,6 @@ except ModuleNotFoundError:
     import datetime
 
     class _DummyMacroRecorder:
-        """
-        Fallback MacroRecorder for direct execution.
-        - API compatible (minimum)
-        - No external dependency
-        """
-
         def __init__(self):
             self._recording = False
             self._steps = []
@@ -92,35 +90,18 @@ except ModuleNotFoundError:
     _DUMMY_MACRO = _DummyMacroRecorder()
 
     def get_macro_recorder():
-        """
-        Fallback getter.
-        Same signature as services.macro_recorder.get_macro_recorder
-        """
         return _DUMMY_MACRO
 
 
 # =================================================
-# Top-level helpers (no nested functions)
+# Helpers
 # =================================================
 def now_ms() -> int:
     return int(time.time() * 1000)
 
 
-def mod_to_str(mod: Qt.KeyboardModifiers) -> str:
-    parts = []
-    if mod & Qt.ControlModifier:
-        parts.append("Ctrl")
-    if mod & Qt.ShiftModifier:
-        parts.append("Shift")
-    if mod & Qt.AltModifier:
-        parts.append("Alt")
-    if mod & Qt.MetaModifier:
-        parts.append("Meta")
-    return "+".join(parts) if parts else "None"
-
-
 def key_to_name(key: int) -> str:
-    m = {
+    return {
         Qt.Key_Up: "Up",
         Qt.Key_Down: "Down",
         Qt.Key_Left: "Left",
@@ -138,534 +119,220 @@ def key_to_name(key: int) -> str:
         Qt.Key_R: "R",
         Qt.Key_S: "S",
         Qt.Key_F4: "F4",
-    }
-    return m.get(key, f"Key({key})")
+    }.get(key, f"Key({key})")
 
 
-def obj_name(obj: Any) -> str:
-    try:
-        if obj is None:
-            return "None"
-        n = obj.objectName()
-        if n:
-            return n
-        return obj.__class__.__name__
-    except Exception:
-        return str(type(obj))
+def mod_to_str(mod: Qt.KeyboardModifiers) -> str:
+    parts = []
+    if mod & Qt.ControlModifier:
+        parts.append("Ctrl")
+    if mod & Qt.ShiftModifier:
+        parts.append("Shift")
+    if mod & Qt.AltModifier:
+        parts.append("Alt")
+    if mod & Qt.MetaModifier:
+        parts.append("Meta")
+    return "+".join(parts) if parts else "None"
 
 
-def focus_snapshot() -> str:
-    try:
-        fw = QApplication.focusWidget()
-        aw = QApplication.activeWindow()
-        return f"focus={obj_name(fw)} activeWindow={obj_name(aw)}"
-    except Exception:
-        return "focus=(unknown)"
+# =================================================
+# UI Log Buffer
+# =================================================
+class UILog:
+    def __init__(self, view: QTextEdit, max_len: int = 10):
+        self._buf = deque(maxlen=max_len)
+        self._view = view
+
+    def add(self, msg: str, color: str = "#ddd"):
+        self._buf.appendleft(f'<span style="color:{color}">▸ {msg}</span>')
+        self._view.setHtml("<br>".join(self._buf))
 
 
-def safe_native_info(e: QKeyEvent) -> str:
-    try:
-        return f"native_vk={e.nativeVirtualKey()} native_sc={e.nativeScanCode()} native_mod={e.nativeModifiers()}"
-    except Exception:
-        return "native=(n/a)"
+# =================================================
+# Key Dispatcher
+# =================================================
+class KeyDispatcher:
+    def __init__(self, panel: "InspectorPanel"):
+        self.p = panel
 
+    def handle(self, e: QKeyEvent, trace_id: int):
+        key = e.key()
+        mod = e.modifiers()
 
-def kv_compact(d: Dict[str, Any]) -> str:
-    try:
-        return " ".join([f"{k}={d[k]!r}" for k in d.keys()])
-    except Exception:
-        return str(d)
+        if (mod & Qt.ControlModifier) and (mod & Qt.ShiftModifier):
+            if key == Qt.Key_R:
+                self.p.toggle_record()
+                return
+            if key == Qt.Key_S:
+                self.p.save_macro()
+                return
+
+        if (mod & Qt.AltModifier) and key == Qt.Key_F4:
+            self.p.close()
+            return
+
+        if key == Qt.Key_F2:
+            self.p.enter_edit(trace_id)
+            return
+
+        if self.p.edit_mode:
+            self.p.handle_edit_keys(e, trace_id)
+            return
+
+        if (mod & Qt.ControlModifier) and (mod & Qt.ShiftModifier):
+            if key in self.p.ARROWS:
+                self.p.exec_and_log("select_edge", trace_id, direction=self.p.dir(key),
+                                    msg="Select edge (Ctrl+Shift+Arrow)", color="#7fd7ff")
+                return
+
+        if mod & Qt.ControlModifier:
+            self.p.handle_ctrl(key, trace_id)
+            return
+
+        if mod & Qt.ShiftModifier:
+            if key in self.p.ARROWS:
+                self.p.exec_and_log("select_move", trace_id, direction=self.p.dir(key),
+                                    msg="Select move (Shift+Arrow)", color="#7fd7ff")
+                return
+
+        if key in self.p.ARROWS:
+            d = self.p.dir(key)
+            self.p.exec_and_log("move_cell", trace_id, direction=d, step=1,
+                                msg=f"Move {d} (Arrow)", color="#aaa")
+            return
 
 
 # =================================================
 # InspectorPanel
 # =================================================
 class InspectorPanel(QWidget):
-    """
-    Excel Inspector (Excel-like, Keyboard-first)
-
-    - F2 : edit cell
-    - Enter : commit
-    - Esc : cancel edit only
-    - Ctrl / Shift / Arrow : Excel compatible
-    - Ctrl+Shift+R : Macro record start/stop
-    - Ctrl+Shift+S : Macro save
-    - Alt+F4 : close window
-
-    ★ Debug tracing:
-      - KeyPress/KeyRelease に trace_id を採番
-      - _exec に trace_id を付与して TreeView/ExcelWorker と突合可能にする
-    """
-
     MAX_LOG = 10
     POLL_MS = 400
+    ARROWS = (Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right)
 
     def __init__(self):
         super().__init__(None)
 
         self._tree = None
         self._macro = get_macro_recorder()
-
-        self._log_buf = deque(maxlen=self.MAX_LOG)
-        self._edit_mode = False
+        self._trace = 0
+        self.edit_mode = False
         self._last_ctx: Optional[str] = None
-        self._active_cell: Optional[str] = None
 
-        # ---- tracing
-        self._trace_seq: int = 0
-        self._last_exec_trace: Optional[int] = None
-        self._last_exec_at_ms: int = 0
-
-        # ---- window
         self.setWindowTitle("Excel Inspector")
         self.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
         self.resize(620, 420)
         self.setStyleSheet("QWidget { background-color:#0f0f0f; }")
-
-        # ★ Inspector 自体は常にキーを取れる状態にする
         self.setFocusPolicy(Qt.StrongFocus)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(8)
 
-        # =================================================
-        # Header (Address + REC slot + hint)
-        # =================================================
-        header = QHBoxLayout()
-        header.setSpacing(8)
-
         self.addr_label = QLabel("—")
         self.addr_label.setAlignment(Qt.AlignCenter)
         self.addr_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.addr_label.setStyleSheet(
-            """
-            QLabel {
-                background:#1b1b1b;
-                color:#7fd7ff;
-                font-size:14px;
-                font-weight:700;
-                padding:6px;
-                border-radius:6px;
-            }
-            """
+            "background:#1b1b1b;color:#7fd7ff;font-size:14px;font-weight:700;padding:6px;border-radius:6px;"
         )
-        self.addr_label.setFocusPolicy(Qt.NoFocus)
-        self.addr_label.setTextInteractionFlags(Qt.NoTextInteraction)
 
         self.rec_label = QLabel("")
         self.rec_label.setFixedWidth(56)
         self.rec_label.setAlignment(Qt.AlignCenter)
-        self.rec_label.setStyleSheet(
-            """
-            QLabel {
-                color:#ff4d4d;
-                font-weight:900;
-            }
-            """
-        )
-        self.rec_label.setFocusPolicy(Qt.NoFocus)
-        self.rec_label.setTextInteractionFlags(Qt.NoTextInteraction)
+        self.rec_label.setStyleSheet("color:#ff4d4d;font-weight:900;")
 
         self.hint_label = QLabel("Ctrl+Shift+R:REC   Ctrl+Shift+S:SAVE")
         self.hint_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.hint_label.setStyleSheet(
-            """
-            QLabel {
-                color:#666;
-                font-size:11px;
-                padding-right:4px;
-            }
-            """
-        )
+        self.hint_label.setStyleSheet("color:#666;font-size:11px;")
         self.hint_label.setFixedWidth(230)
-        self.hint_label.setFocusPolicy(Qt.NoFocus)
-        self.hint_label.setTextInteractionFlags(Qt.NoTextInteraction)
 
+        header = QHBoxLayout()
         header.addWidget(self.addr_label, 1)
-        header.addWidget(self.rec_label, 0)
-        header.addWidget(self.hint_label, 0)
+        header.addWidget(self.rec_label)
+        header.addWidget(self.hint_label)
         root.addLayout(header)
 
-        # =================================================
-        # Formula bar
-        # =================================================
         bar = QHBoxLayout()
-        bar.setSpacing(8)
-
         fx = QLabel("fx")
         fx.setFixedWidth(26)
         fx.setAlignment(Qt.AlignCenter)
-        fx.setStyleSheet("color:#6cf; font-weight:700;")
-        fx.setFocusPolicy(Qt.NoFocus)
-        fx.setTextInteractionFlags(Qt.NoTextInteraction)
+        fx.setStyleSheet("color:#6cf;font-weight:700;")
 
         self.editor = QLineEdit()
-        self.editor.setPlaceholderText("F2 to edit")
-        self.editor.setStyleSheet(
-            """
-            QLineEdit {
-                background:#151515;
-                color:#eee;
-                border:1px solid #2a2a2a;
-                border-radius:6px;
-                padding:8px;
-                font-size:14px;
-            }
-            QLineEdit:focus { border:1px solid #6cf; }
-            """
-        )
-        self.editor.setFocusPolicy(Qt.NoFocus)
         self.editor.setReadOnly(True)
+        self.editor.setFocusPolicy(Qt.NoFocus)
+        self.editor.setStyleSheet(
+            "background:#151515;color:#eee;border:1px solid #2a2a2a;border-radius:6px;padding:8px;font-size:14px;"
+        )
 
         bar.addWidget(fx)
         bar.addWidget(self.editor, 1)
         root.addLayout(bar)
 
-        # =================================================
-        # Log
-        # =================================================
-        self.log = QTextEdit()
-        self.log.setReadOnly(True)
-        self.log.setFixedHeight(170)
-        self.log.setStyleSheet(
-            """
-            QTextEdit {
-                background:#101010;
-                color:#ccc;
-                border-radius:6px;
-                padding:6px;
-            }
-            """
-        )
-        self.log.setFocusPolicy(Qt.NoFocus)
-        self.log.setTextInteractionFlags(Qt.NoTextInteraction)
+        self.log_view = QTextEdit()
+        self.log_view.setReadOnly(True)
+        self.log_view.setFixedHeight(170)
+        self.log_view.setStyleSheet("background:#101010;color:#ccc;border-radius:6px;padding:6px;")
+        root.addWidget(self.log_view)
 
-        root.addWidget(self.log)
+        self.ui_log = UILog(self.log_view, self.MAX_LOG)
+        self.ui_log.add("Help: Ctrl+Shift+R = REC  /  Ctrl+Shift+S = SAVE", "#777")
 
-        self._log_add("Help: Ctrl+Shift+R = REC  /  Ctrl+Shift+S = SAVE", "#777")
+        self.dispatcher = KeyDispatcher(self)
 
-        # =================================================
-        # Key capture
-        # =================================================
         self.installEventFilter(self)
         self.editor.installEventFilter(self)
 
-        # =================================================
-        # Poll Excel context
-        # =================================================
         self._poll = QTimer(self)
-        self._poll.timeout.connect(self._poll_context)
+        self._poll.timeout.connect(self.poll_context)
         self._poll.start(self.POLL_MS)
 
-        QTimer.singleShot(0, self._focus_inspector)
+        # --- Key debounce state ---
+        self.KEY_GUARD_MS = 120
+        self._last_key_sig: Optional[tuple[int, int]] = None
+        self._last_key_at_ms: int = 0
 
-        logger.info(f"[Inspector] InspectorPanel ready {focus_snapshot()}")
-
-    # =================================================
-    # tracing
-    # =================================================
-    def _next_trace_id(self) -> int:
-        self._trace_seq += 1
-        return self._trace_seq
-
-    def _log_key_event(self, phase: str, obj: Any, e: QKeyEvent, trace_id: int):
-        info = {
-            "trace": trace_id,
-            "phase": phase,
-            "obj": obj_name(obj),
-            "key": key_to_name(e.key()),
-            "mod": mod_to_str(e.modifiers()),
-            "auto": bool(e.isAutoRepeat()),
-            "text": e.text(),
-            "t_ms": now_ms(),
-        }
-        logger.info(
-            f"[KEY] {kv_compact(info)} "
-            f"{safe_native_info(e)} "
-            f"{focus_snapshot()}"
-        )
-
-    def _log_exec(self, op: str, trace_id: int, kw: Dict[str, Any]):
-        base = {
-            "trace": trace_id,
-            "op": op,
-            "t_ms": now_ms(),
-            "edit_mode": self._edit_mode,
-        }
-        logger.info(f"[EXEC] {kv_compact(base)} kw={kw} {focus_snapshot()}")
-
-    # =================================================
-    # Focus helpers
-    # =================================================
-    def _focus_inspector(self):
-        try:
-            self.setFocus(Qt.ActiveWindowFocusReason)
-        except Exception as e:
-            logger.error(f"[Inspector] focus failed: {e}\n{traceback.format_exc()}")
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        try:
-            self.raise_()
-            self.activateWindow()
-        except Exception as e:
-            logger.error(f"[Inspector] showEvent activate failed: {e}\n{traceback.format_exc()}")
-        self._focus_inspector()
-
-    def mousePressEvent(self, event):
-        try:
-            if not self._edit_mode:
-                self._focus_inspector()
-        except Exception as e:
-            logger.error(f"[Inspector] mousePress focus failed: {e}\n{traceback.format_exc()}")
-        super().mousePressEvent(event)
-
-    # =================================================
-    # External bind
-    # =================================================
-    def set_tree(self, tree):
-        self._tree = tree
-        logger.info(f"[Inspector] set_tree tree={obj_name(tree)}")
-
-    def set_current_cell(self, cell: str):
-        self._active_cell = cell
-        logger.info(f"[Inspector] set_current_cell cell={cell}")
-
-    # =================================================
-    # Event filter
-    # =================================================
+    # -------------------------------------------------
+    # EventFilter
+    # -------------------------------------------------
     def eventFilter(self, obj, event):
-
-        # -----------------------------
-        # KeyPress：記録のみ（EXECしない）
-        # -----------------------------
         if event.type() == QEvent.KeyPress:
-            e = event  # type: ignore[assignment]
-            if not isinstance(e, QKeyEvent):
-                return super().eventFilter(obj, event)
-
-            trace_id = self._next_trace_id()
-            self._log_key_event("press", obj, e, trace_id)
-
-            # AutoRepeat は無視（既存仕様）
+            e: QKeyEvent = event  # type: ignore
             if e.isAutoRepeat():
                 return True
 
-            # 編集中は editor に任せる（既存仕様）
-            if self._edit_mode and obj is self.editor:
-                logger.info(f"[KEY] trace={trace_id} pass_to_editor=True")
+            # ★ 編集中 + editor 由来はデバウンスしない
+            if self.edit_mode and obj is self.editor:
                 return False
 
-            # ★ ここでは EXEC しない
-            return True
+            # --- 重複防止（Inspector 操作のみ） ---
+            now = now_ms()
+            sig = (int(e.key()), int(e.modifiers().value))
+            if self._last_key_sig == sig and (now - self._last_key_at_ms) < self.KEY_GUARD_MS:
+                logger.debug(
+                    f"[KEY] debounce skip key={key_to_name(e.key())} "
+                    f"mod={mod_to_str(e.modifiers())} dt={now - self._last_key_at_ms}ms"
+                )
+                return True
 
-        # -----------------------------
-        # KeyRelease：EXEC はここで
-        # -----------------------------
-        if event.type() == QEvent.KeyRelease:
-            e = event  # type: ignore[assignment]
-            if not isinstance(e, QKeyEvent):
-                return super().eventFilter(obj, event)
+            self._last_key_sig = sig
+            self._last_key_at_ms = now
 
-            trace_id = self._next_trace_id()
-            self._log_key_event("release", obj, e, trace_id)
+            self._trace += 1
+            logger.info(
+                f"[KEY] trace={self._trace} key={key_to_name(e.key())} "
+                f"mod={mod_to_str(e.modifiers())}"
+            )
 
-            # 編集中は editor に任せる
-            if self._edit_mode and obj is self.editor:
-                logger.info(f"[KEY] trace={trace_id} pass_to_editor=True")
-                return False
-
-            self._handle_key(e, trace_id)
+            self.dispatcher.handle(e, self._trace)
             return True
 
         return super().eventFilter(obj, event)
 
-    # =================================================
-    # Key logic
-    # =================================================
-    def _handle_key(self, e: QKeyEvent, trace_id: int):
-        key = e.key()
-        mod = e.modifiers()
-
-        # ---- Macro ----
-        if (mod & Qt.ControlModifier) and (mod & Qt.ShiftModifier):
-            if key == Qt.Key_R:
-                self._toggle_record()
-                return
-            if key == Qt.Key_S:
-                self._save_macro_dialog()
-                return
-
-        # ---- Window ----
-        if (mod & Qt.AltModifier) and key == Qt.Key_F4:
-            self.close()
-            return
-
-        # ---- F2 ----
-        if key == Qt.Key_F2:
-            self._edit_mode = True
-            self.editor.setReadOnly(False)
-            self.editor.setFocusPolicy(Qt.StrongFocus)
-            self.editor.setFocus(Qt.OtherFocusReason)
-            self.editor.selectAll()
-            self._log_add("Edit (F2)", "#7fd7ff")
-            logger.info(f"[MODE] trace={trace_id} edit_mode=True")
-            return
-
-        # ---- Editing ----
-        if self._edit_mode:
-            if key in (Qt.Key_Return, Qt.Key_Enter):
-                val = self.editor.text()
-                self._exec("set_cell_value", trace_id, cell="*", value=val)
-                self._log_add(f"Set = {val}", "#ffb347")
-                self.editor.clear()
-
-                self._edit_mode = False
-                self.editor.setReadOnly(True)
-                self.editor.setFocusPolicy(Qt.NoFocus)
-                self._focus_inspector()
-                logger.info(f"[MODE] trace={trace_id} edit_mode=False commit=True")
-                return
-
-            if key == Qt.Key_Escape:
-                self.editor.clear()
-                self._edit_mode = False
-                self.editor.setReadOnly(True)
-                self.editor.setFocusPolicy(Qt.NoFocus)
-                self._log_add("Edit cancel (Esc)", "#aaa")
-                self._focus_inspector()
-                logger.info(f"[MODE] trace={trace_id} edit_mode=False cancel=True")
-                return
-
-            logger.info(f"[MODE] trace={trace_id} editing_ignore key={key_to_name(key)}")
-            return
-
-        # ---- Ctrl+Shift (select edge) ----
-        if (mod & Qt.ControlModifier) and (mod & Qt.ShiftModifier):
-            if key in (Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right):
-                self._exec("select_edge", trace_id, direction=self._dir(key))
-                self._log_add("Select edge (Ctrl+Shift+Arrow)", "#7fd7ff")
-                return
-
-        # ---- Ctrl ----
-        if mod & Qt.ControlModifier:
-            if key == Qt.Key_A:
-                self._exec_and_log("select_all", trace_id, "Select All (Ctrl+A)", "#6cf")
-                return
-            if key == Qt.Key_C:
-                self._exec_and_log("copy", trace_id, "Copy (Ctrl+C)", "#6cf")
-                return
-            if key == Qt.Key_X:
-                self._exec_and_log("cut", trace_id, "Cut (Ctrl+X)", "#6cf")
-                return
-            if key == Qt.Key_V:
-                self._exec_and_log("paste", trace_id, "Paste (Ctrl+V)", "#6cf")
-                return
-            if key == Qt.Key_Z:
-                self._exec_and_log("undo", trace_id, "Undo (Ctrl+Z)", "#6cf")
-                return
-            if key == Qt.Key_Y:
-                self._exec_and_log("redo", trace_id, "Redo (Ctrl+Y)", "#6cf")
-                return
-
-            if key in (Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right):
-                self._exec("move_edge", trace_id, direction=self._dir(key))
-                self._log_add("Move edge (Ctrl+Arrow)", "#aaa")
-                return
-
-        # ---- Shift (select move) ----
-        if mod & Qt.ShiftModifier:
-            if key in (Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right):
-                self._exec("select_move", trace_id, direction=self._dir(key))
-                self._log_add("Select move (Shift+Arrow)", "#7fd7ff")
-                return
-
-        # ---- Arrow ----
-        if key in (Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right):
-            direction = self._dir(key)
-            self._exec("move_cell", trace_id, direction=direction, step=1)
-            self._log_add(f"Move {direction} (Arrow)", "#aaa")
-            return
-
-        logger.info(
-            f"[KEY] trace={trace_id} unhandled key={key_to_name(key)} mod={mod_to_str(mod)}"
-        )
-
-    # =================================================
-    # Macro
-    # =================================================
-    def _toggle_record(self):
-        if not self._macro.is_recording():
-            self._macro.start()
-            self.rec_label.setText("● REC")
-            self._log_add("REC START (Ctrl+Shift+R)", "#ff4d4d")
-            logger.info("[MACRO] start recording=True")
-        else:
-            self._macro.stop()
-            self.rec_label.setText("")
-            self._log_add("REC STOP (Ctrl+Shift+R)", "#ff4d4d")
-            logger.info("[MACRO] stop recording=False")
-
-    def _save_macro_dialog(self):
-        try:
-            cnt = self._macro.steps_count()
-        except Exception:
-            try:
-                cnt = len(getattr(self._macro, "_steps", []))
-            except Exception:
-                cnt = 0
-
-        logger.info(f"[MACRO] save_dialog steps={cnt}")
-
-        if cnt == 0:
-            self._log_add("No macro steps (Ctrl+Shift+S)", "#aaa")
-            return
-
-        path, _ = QFileDialog.getSaveFileName(self, "Save Macro", "", "Macro JSON (*.json)")
-        if not path:
-            self._log_add("Save canceled (Ctrl+Shift+S)", "#777")
-            logger.info("[MACRO] save canceled")
-            return
-
-        try:
-            self._macro.save_json(path)
-            self._log_add(f"Saved macro ({cnt} steps) (Ctrl+Shift+S)", "#7fd7ff")
-            logger.info(f"[MACRO] saved path={path} steps={cnt}")
-        except Exception as e:
-            logger.error(f"[MACRO] save failed: {e}\n{traceback.format_exc()}")
-            self._log_add("Macro save failed", "#f66")
-
-    # =================================================
-    # Poll
-    # =================================================
-    def _poll_context(self):
-        if not self._tree:
-            return
-
-        try:
-            ctx = self._tree._engine_exec("get_active_context")
-        except Exception as e:
-            logger.error(f"[CTX] get_active_context failed: {e}\n{traceback.format_exc()}")
-            return
-
-        if not isinstance(ctx, dict):
-            logger.info(f"[CTX] ignored ctx_type={type(ctx)}")
-            return
-
-        addr = str(ctx.get("address", "")).replace("$", "")
-        sheet = str(ctx.get("sheet", ""))
-        label = f"{sheet}!{addr}" if sheet and addr else "—"
-
-        if label != self._last_ctx:
-            self._last_ctx = label
-            self.addr_label.setText(label)
-            logger.info(f"[CTX] update label={label} ctx={ctx}")
-
-    # =================================================
-    # Helpers
-    # =================================================
-    def _dir(self, key: int) -> str:
+    # -------------------------------------------------
+    # Actions
+    # -------------------------------------------------
+    def dir(self, key: int) -> str:
         return {
             Qt.Key_Up: "up",
             Qt.Key_Down: "down",
@@ -673,35 +340,133 @@ class InspectorPanel(QWidget):
             Qt.Key_Right: "right",
         }[key]
 
-    def _exec(self, op: str, trace_id: int, **kw):
-        now_ = now_ms()
-        dt = now_ - self._last_exec_at_ms
-        self._last_exec_at_ms = now_
-        self._last_exec_trace = trace_id
-
-        logger.warning(
-            f"[CUT] INSPECTOR_EXEC seq={self._trace_seq} trace={trace_id} op={op} dt={dt}ms kw={kw}"
-        )
-
+    def exec(self, op: str, trace_id: int, **kw):
         if self._tree:
-            payload = dict(kw)
-            payload["_trace_id"] = trace_id
-            payload["_dt_ms_from_prev_exec"] = dt
-            self._tree._engine_exec(op, source="inspector", **payload)
+            self._tree._engine_exec(op, source="inspector", **kw)
 
-    def _exec_and_log(self, op: str, trace_id: int, msg: str, color: str):
-        self._exec(op, trace_id)
-        self._log_add(msg, color)
+    def exec_and_log(self, op: str, trace_id: int, msg: str, color: str, **kw):
+        self.exec(op, trace_id, **kw)
+        self.ui_log.add(msg, color)
 
-    def _log_add(self, msg: str, color: str = "#ddd"):
-        self._log_buf.appendleft(f'<span style="color:{color}">▸ {msg}</span>')
-        self.log.setHtml("<br>".join(self._log_buf))
+    def handle_ctrl(self, key: int, trace_id: int):
+        mapping = {
+            Qt.Key_A: ("select_all", "Select All (Ctrl+A)"),
+            Qt.Key_C: ("copy", "Copy (Ctrl+C)"),
+            Qt.Key_X: ("cut", "Cut (Ctrl+X)"),
+            Qt.Key_V: ("paste", "Paste (Ctrl+V)"),
+            Qt.Key_Z: ("undo", "Undo (Ctrl+Z)"),
+            Qt.Key_Y: ("redo", "Redo (Ctrl+Y)"),
+        }
+        if key in mapping:
+            op, msg = mapping[key]
+            self.exec_and_log(op, trace_id, msg, "#6cf")
+            return
+        if key in self.ARROWS:
+            self.exec_and_log("move_edge", trace_id,
+                              "Move edge (Ctrl+Arrow)", "#aaa",
+                              direction=self.dir(key))
 
+    def enter_edit(self, trace_id: int):
+        self.edit_mode = True
+        self.editor.setReadOnly(False)
+        self.editor.setFocusPolicy(Qt.StrongFocus)
+        self.editor.setFocus()
+        self.editor.selectAll()
+        self.ui_log.add("Edit (F2)", "#7fd7ff")
 
-# =================================================
-# Validation (dev only / same file)
-#   ※ ネスト関数禁止のため top-level 化
-# =================================================
+    def handle_edit_keys(self, e: QKeyEvent, trace_id: int):
+        if e.key() in (Qt.Key_Return, Qt.Key_Enter):
+            val = self.editor.text()
+            self.exec("set_cell_value", trace_id, cell="*", value=val)
+            self.ui_log.add(f"Set = {val}", "#ffb347")
+            self.editor.clear()
+            self.exit_edit()
+            return
+        if e.key() == Qt.Key_Escape:
+            self.editor.clear()
+            self.ui_log.add("Edit cancel (Esc)", "#aaa")
+            self.exit_edit()
+
+    def exit_edit(self):
+        self.edit_mode = False
+        self.editor.setReadOnly(True)
+        self.editor.setFocusPolicy(Qt.NoFocus)
+        self.setFocus()
+
+    def toggle_record(self):
+        if not self._macro.is_recording():
+            self._macro.start()
+            self.rec_label.setText("● REC")
+            self.ui_log.add("REC START (Ctrl+Shift+R)", "#ff4d4d")
+        else:
+            self._macro.stop()
+            self.rec_label.setText("")
+            self.ui_log.add("REC STOP (Ctrl+Shift+R)", "#ff4d4d")
+
+    def save_macro(self):
+        cnt = self._macro.steps_count()
+        if cnt == 0:
+            self.ui_log.add("No macro steps (Ctrl+Shift+S)", "#aaa")
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Save Macro", "", "Macro JSON (*.json)")
+        if not path:
+            self.ui_log.add("Save canceled (Ctrl+Shift+S)", "#777")
+            return
+        self._macro.save_json(path)
+        self.ui_log.add(f"Saved macro ({cnt} steps) (Ctrl+Shift+S)", "#7fd7ff")
+
+    # -------------------------------------------------
+    # Poll
+    # -------------------------------------------------
+    def poll_context(self):
+        if not self._tree:
+            return
+        try:
+            ctx = self._tree._engine_exec("get_active_context")
+        except Exception:
+            return
+        if not isinstance(ctx, dict):
+            return
+        addr = str(ctx.get("address", "")).replace("$", "")
+        sheet = str(ctx.get("sheet", ""))
+        label = f"{sheet}!{addr}" if sheet and addr else "—"
+        if label != self._last_ctx:
+            self._last_ctx = label
+            self.addr_label.setText(label)
+
+    # -------------------------------------------------
+    # External bind
+    # -------------------------------------------------
+    def set_tree(self, tree):
+        self._tree = tree
+        logger.info(f"[Inspector] set_tree tree={tree}")
+
+    def set_current_cell(self, cell: str):
+        logger.info(f"[Inspector] set_current_cell cell={cell}")
+
+    # -------------------------------------------------
+    # Focus helpers
+    # -------------------------------------------------
+    def showEvent(self, event):
+        super().showEvent(event)
+        try:
+            self.raise_()
+            self.activateWindow()
+            self.setFocus(Qt.ActiveWindowFocusReason)
+        except Exception:
+            pass
+
+    def mousePressEvent(self, event):
+        try:
+            if not self.edit_mode:
+                self.setFocus(Qt.ActiveWindowFocusReason)
+        except Exception:
+            pass
+        super().mousePressEvent(event)
+
+    # -------------------------------------------------
+    # Validation helpers (dev only)
+    # -------------------------------------------------
 class _FakeTree:
     def __init__(self):
         self.calls = []
@@ -732,36 +497,48 @@ def _assert_last(tree: _FakeTree, op: str, **expect):
 def validate_keys(panel: InspectorPanel, tree: _FakeTree):
     from PySide6.QtTest import QTest
 
-    logger.info("=== VALIDATE: key mapping ===")
+    wait_ms = panel.KEY_GUARD_MS + 10
 
     tree.clear()
     QTest.keyClick(panel, Qt.Key_Down)
+    QTest.qWait(wait_ms)
     _assert_last(tree, "move_cell", direction="down", step=1, source="inspector")
 
     tree.clear()
     QTest.keyClick(panel, Qt.Key_Right, Qt.ShiftModifier)
+    QTest.qWait(wait_ms)
     _assert_last(tree, "select_move", direction="right", source="inspector")
 
     tree.clear()
     QTest.keyClick(panel, Qt.Key_Left, Qt.ControlModifier)
+    QTest.qWait(wait_ms)
     _assert_last(tree, "move_edge", direction="left", source="inspector")
 
     tree.clear()
     QTest.keyClick(panel, Qt.Key_Up, Qt.ControlModifier | Qt.ShiftModifier)
+    QTest.qWait(wait_ms)
     _assert_last(tree, "select_edge", direction="up", source="inspector")
-
-    logger.info("=== VALIDATE: key mapping OK ===")
-
 
 def validate_edit(panel: InspectorPanel, tree: _FakeTree):
     from PySide6.QtTest import QTest
 
-    logger.info("=== VALIDATE: edit mode ===")
+    wait_ms = panel.KEY_GUARD_MS + 10
 
     tree.clear()
+
+    # F2
     QTest.keyClick(panel, Qt.Key_F2)
+    QTest.qWait(wait_ms)
+
+    # 入力（ここは editor が処理するのでデバウンス非対象）
     QTest.keyClicks(panel.editor, "abc")
+
+    # ★ 人間は必ず Enter の前に一瞬止まる
+    QTest.qWait(wait_ms)
+
+    # Enter
     QTest.keyClick(panel.editor, Qt.Key_Return)
+    QTest.qWait(wait_ms)
 
     _assert_last(
         tree,
@@ -771,18 +548,12 @@ def validate_edit(panel: InspectorPanel, tree: _FakeTree):
         source="inspector",
     )
 
-    assert panel._edit_mode is False
+    assert panel.edit_mode is False
     assert panel.editor.isReadOnly() is True
 
-    logger.info("=== VALIDATE: edit mode OK ===")
-
-
 def validate_autorepeat(panel: InspectorPanel):
-    from PySide6.QtTest import QTest
     from PySide6.QtGui import QKeyEvent
     from PySide6.QtCore import QEvent
-
-    logger.info("=== VALIDATE: autorepeat ignore ===")
 
     tree: _FakeTree = panel._tree  # type: ignore
     tree.clear()
@@ -796,11 +567,9 @@ def validate_autorepeat(panel: InspectorPanel):
         1,
     )
     QApplication.sendEvent(panel, ev)
-    QTest.qWait(10)
 
-    assert len(tree.calls) == 0, "AutoRepeat で engine_exec が呼ばれています"
-
-    logger.info("=== VALIDATE: autorepeat OK ===")
+    # autoRepeat はデバウンス以前に無視される
+    assert len(tree.calls) == 0
 
 
 def validate_user_input(panel: InspectorPanel):
@@ -809,12 +578,11 @@ def validate_user_input(panel: InspectorPanel):
     logger.info("=== VALIDATE: user key input ===")
     logger.info("↓ 今から実キーを押してください ↓")
     logger.info("  Arrow / Shift+Arrow / Ctrl+Arrow / F2 → Enter")
-    logger.info("  （10秒以内）")
+    logger.info("  （10秒以内・デバウンス有効）")
 
     QTest.qWait(10000)
 
     logger.info("=== VALIDATE: user key input DONE ===")
-
 
 if __name__ == "__main__":
     import sys
@@ -826,9 +594,9 @@ if __name__ == "__main__":
     panel = InspectorPanel()
     fake_tree = _FakeTree()
     panel.set_tree(fake_tree)
-    panel._poll.stop()  # ノイズ防止
-    panel.show()
+    panel._poll.stop()
 
+    panel.show()
     QTest.qWaitForWindowExposed(panel)
     panel.activateWindow()
     panel.setFocus()

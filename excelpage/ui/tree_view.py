@@ -220,14 +220,14 @@ class LauncherTreeView(QTreeView):
                 self._hover_delegate.clear_hover_index()
             self.viewport().update()
         except Exception as e:
-            logger.error("[Hover] entered handler failed: %s", e, exc_info=True)
+            logger.error(f"[Hover] entered handler failed: {e}")
 
     def leaveEvent(self, event):
         try:
             self._hover_delegate.clear_hover_index()
             self.viewport().update()
         except Exception as e:
-            logger.error("[Hover] leaveEvent failed: %s", e, exc_info=True)
+            logger.error(f"[Hover] leaveEvent failed: {e}")
         super().leaveEvent(event)
 
     def _on_hover_edit_clicked(self, idx: QModelIndex):
@@ -243,12 +243,12 @@ class LauncherTreeView(QTreeView):
                 logger.info("[Hover] edit ignored (sheet)")
                 return
 
-            logger.info("[Hover] edit start kind=%s text=%s", tag.kind, str(idx.data()))
+            logger.info(f"[Hover] edit start kind={tag.kind} text={str(idx.data())}")
             self._set_single_selection(idx)
             self.edit(idx)
 
         except Exception as e:
-            logger.error("[Hover] edit clicked failed: %s", e, exc_info=True)
+            logger.error(f"[Hover] edit clicked failed: {e}")
 
     def _on_hover_delete_clicked(self, idx: QModelIndex):
         try:
@@ -284,22 +284,22 @@ class LauncherTreeView(QTreeView):
                 QMessageBox.No,
             )
             if ret != QMessageBox.Yes:
-                logger.info("[Hover] delete canceled by user name=%s", name)
+                logger.info(f"[Hover] delete canceled by user name={name}")
                 return
 
             # ★ file を消すなら Excel も閉じる（エンジン残留対策）
             if isinstance(tag, NodeTag) and tag.kind == "file":
                 try:
-                    logger.info("[Hover] request close_book before remove path=%s", tag.path)
+                    logger.info(f"[Hover] request close_book before remove path={tag.path}")
                     self._engine_exec("close_book", path=tag.path)
                 except Exception as e:
-                    logger.error("[Hover] close_book failed: %s", e, exc_info=True)
+                    logger.error(f"[Hover] close_book failed: {e}")
 
-            logger.info("[Hover] delete confirmed kind=%s name=%s", tag.kind, name)
+            logger.info(f"[Hover] delete confirmed kind={tag.kind} name={name}")
             self._remove_item_by_index(idx)
 
         except Exception as e:
-            logger.error("[Hover] delete clicked failed: %s", e, exc_info=True)
+            logger.error(f"[Hover] delete clicked failed: {e}")
 
     def _remove_item_by_index(self, idx: QModelIndex):
         try:
@@ -316,10 +316,10 @@ class LauncherTreeView(QTreeView):
             else:
                 parent.removeRow(item.row())
 
-            logger.info("[Remove] removed row=%s", idx.row())
+            logger.info(f"[Remove] removed row={idx.row()}")
 
         except Exception as e:
-            logger.error("[Remove] remove failed: %s", e, exc_info=True)
+            logger.error(f"[Remove] remove failed: {e}")
 
     # =================================================
     # Project Export / Import
@@ -334,7 +334,7 @@ class LauncherTreeView(QTreeView):
             "version": 1,
             "groups": groups,
         }
-        logger.info("[Project] export completed groups=%s", len(groups))
+        logger.info(f"[Project] export completed groups={len(groups)}")
         return out
 
     def _export_item_recursive(self, item: QStandardItem) -> Dict[str, Any]:
@@ -344,7 +344,7 @@ class LauncherTreeView(QTreeView):
             try:
                 tag_dict = tag.to_dict()
             except Exception as e:
-                logger.error("[Project] tag.to_dict failed: %s", e, exc_info=True)
+                logger.error(f"[Project] tag.to_dict failed: {e}")
                 tag_dict = {
                     "kind": getattr(tag, "kind", ""),
                     "path": getattr(tag, "path", ""),
@@ -379,7 +379,7 @@ class LauncherTreeView(QTreeView):
             self._model.appendRow(it)
             self.expand(it.index())
 
-        logger.info("[Project] import completed groups=%s", len(groups))
+        logger.info(f"[Project] import completed groups={len(groups)}")
 
     def _import_item_recursive(self, node: Dict[str, Any]) -> QStandardItem:
         if not isinstance(node, dict):
@@ -393,7 +393,7 @@ class LauncherTreeView(QTreeView):
             try:
                 tag = NodeTag.from_dict(tag_data)
             except Exception as e:
-                logger.error("[Project] NodeTag.from_dict failed: %s", e, exc_info=True)
+                logger.error(f"[Project] NodeTag.from_dict failed: {e}")
                 kind = str(tag_data.get("kind", "folder"))
                 path = str(tag_data.get("path", ""))
                 sheet = str(tag_data.get("sheet", ""))
@@ -412,7 +412,7 @@ class LauncherTreeView(QTreeView):
             try:
                 self._engine_exec("open_book", path=tag.path)
             except Exception as e:
-                logger.error("[Project] open_book failed: %s", e, exc_info=True)
+                logger.error(f"[Project] open_book failed: {e}")
 
         return it
 
@@ -438,7 +438,7 @@ class LauncherTreeView(QTreeView):
                     try:
                         ctx = self._excel.get_active_context() or {}
                     except Exception as e:
-                        logger.error("[MACRO] get_active_context failed: %s", e)
+                        logger.error(f"[MACRO] get_active_context failed: {e}")
 
                     record_kwargs = dict(kwargs)
                     if "workbook" not in record_kwargs:
@@ -449,7 +449,7 @@ class LauncherTreeView(QTreeView):
                     self._macro.record(op, **record_kwargs)
 
             except Exception as e:
-                logger.error("macro record failed: %s", e, exc_info=True)
+                logger.error(f"macro record failed: {e}")
 
         # =================================================
         # Execute
@@ -613,7 +613,7 @@ class LauncherTreeView(QTreeView):
         self._model.appendRow(it)
         self.expand(it.index())
 
-        logger.info("[GROUP] added: %s", group_name)
+        logger.info(f"[GROUP] added: {group_name}")
         try:
             self._macro.record("add_group", name=group_name)
         except Exception:
@@ -627,14 +627,14 @@ class LauncherTreeView(QTreeView):
         if ok:
             self._macro.start(name=name or "macro")
             QMessageBox.information(self, "Macro", "録画開始")
-            logger.info("[MACRO] start name=%s", name or "macro")
+            logger.info(f"[MACRO] start name={name or 'macro'}")
 
     def macro_stop(self):
         self._macro.stop()
         QMessageBox.information(
             self, "Macro", f"録画停止（{self._macro.steps_count()} steps）"
         )
-        logger.info("[MACRO] stop steps=%s", self._macro.steps_count())
+        logger.info("[MACRO] stop steps={self._macro.steps_count()}")
 
     def macro_clear(self):
         self._macro.clear()
@@ -649,9 +649,9 @@ class LauncherTreeView(QTreeView):
             try:
                 self._macro.save_json(path)
                 QMessageBox.information(self, "Macro", f"保存しました:\n{path}")
-                logger.info("[MACRO] saved: %s", path)
+                logger.info(f"[MACRO] saved: {path}")
             except Exception as e:
-                logger.exception("Macro save failed: %s", e)
+                logger.error(f"Macro save failed: {e}")
                 QMessageBox.critical(self, "Macro", f"保存に失敗しました:\n{e}")
 
     # =================================================
@@ -695,7 +695,7 @@ class LauncherTreeView(QTreeView):
             item.appendRow(self._create_item(s, NodeTag("sheet", path, s)))
 
         self.expand(item.index())
-        logger.info("[SHEETS] ready path=%s count=%s", path, len(sheets))
+        logger.info(f"[SHEETS] ready path={path} count={len(sheets)}")
 
     # =================================================
     # Diff
@@ -747,7 +747,7 @@ class LauncherTreeView(QTreeView):
         logger.info("[DIFF] ok items=%s", len(payload.get("items", []) or []))
 
     def _on_diff_ng(self, msg: str):
-        logger.error("[DIFF] ng: %s", msg)
+        logger.error(f"[DIFF] ng: %s", msg)
         QMessageBox.critical(self, "Diff", msg)
 
     # =================================================
@@ -946,7 +946,7 @@ class LauncherTreeView(QTreeView):
             if self._inspector:
                 self._inspector.close()
         except Exception as e:
-            logger.error("[EXIT] inspector close failed: %s", e, exc_info=True)
+            logger.error(f"[EXIT] inspector close failed: {e}")
 
         paths = self._collect_tree_book_paths()
         self._exit_total = len(paths)
@@ -976,7 +976,7 @@ class LauncherTreeView(QTreeView):
                 logger.info("[EXIT] request_close path=%s", p)
                 self._excel.request_close(p)
             except Exception as e:
-                logger.error("[EXIT] request_close failed path=%s err=%s", p, e, exc_info=True)
+                logger.error(f"[EXIT] request_close failed path=%s err=%s", p, e, exc_info=True)
                 self._exit_done += 1
                 self._exit_failed.add(p)
                 self._update_exit_progress()
@@ -987,7 +987,7 @@ class LauncherTreeView(QTreeView):
         while self._exit_done < self._exit_total:
             QApplication.processEvents()
             if time.time() - start > timeout_sec:
-                logger.error("[EXIT] close wait timeout done=%s total=%s", self._exit_done, self._exit_total)
+                logger.error(f"[EXIT] close wait timeout done=%s total=%s", self._exit_done, self._exit_total)
                 break
             time.sleep(0.02)
 
@@ -996,7 +996,7 @@ class LauncherTreeView(QTreeView):
             logger.info("[EXIT] ExcelWorker.shutdown(confirm_save=True)")
             self._excel.shutdown(confirm_save=True)
         except Exception as e:
-            logger.error("[EXIT] ExcelWorker.shutdown failed: %s", e, exc_info=True)
+            logger.error(f"[EXIT] ExcelWorker.shutdown failed: {e}")
 
         # 4) thread 終了待ち（エンジン残留防止）
         wait_start = time.time()
@@ -1010,7 +1010,7 @@ class LauncherTreeView(QTreeView):
                 break
 
             if time.time() - wait_start > wait_timeout_sec:
-                logger.error("[EXIT] ExcelWorker wait timeout")
+                logger.error(f"[EXIT] ExcelWorker wait timeout")
                 break
             time.sleep(0.02)
 
