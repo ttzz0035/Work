@@ -355,15 +355,10 @@ class ExcelWorker(QThread):
     def _update_context_cache(self):
         """
         worker thread 内でのみ COM に触って ctx を更新する
+        ★ Signal は出さない（pull型にする）
         """
         try:
             self._ctx = self._snapshot_ctx_from_com()
-            addr = self._ctx.get("address", "")
-            if addr:
-                try:
-                    self.active_cell_changed.emit(addr)
-                except Exception:
-                    pass
         except Exception as e:
             logger.error("[ExcelWorker] update_context_cache failed: %s", e, exc_info=True)
 
