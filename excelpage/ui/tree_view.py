@@ -423,7 +423,12 @@ class LauncherTreeView(QTreeView):
           - "macro"     : マクロ再生（記録しない）
           - None        : 通常UI操作（記録しない）
         """
-        logger.info("[ENGINE] %s source=%s %s", op, source, kwargs)
+        logger.warning(
+            "[CUT][T->E] trace=%s op=%s source=%s",
+            kwargs.get("_trace_id"),
+            op,
+            source,
+        )
 
         # =================================================
         # ★ Macro record : Inspector ONLY

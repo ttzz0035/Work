@@ -659,21 +659,24 @@ class InspectorPanel(QWidget):
         }[key]
 
     def _exec(self, op: str, trace_id: int, **kw):
-        # 追加ログ：連続送信（同一traceじゃない）も可視化する
         now_ = now_ms()
         dt = now_ - self._last_exec_at_ms
         self._last_exec_at_ms = now_
         self._last_exec_trace = trace_id
 
-        # TreeViewへ trace_id を渡して、ExcelWorker側と突合できるようにする
+        logger.warning(
+            "[CUT] INSPECTOR_EXEC seq=%s trace=%s op=%s dt=%sms kw=%s",
+            self._trace_seq,
+            trace_id,
+            op,
+            dt,
+            kw,
+        )
+
         if self._tree:
             payload = dict(kw)
             payload["_trace_id"] = trace_id
             payload["_dt_ms_from_prev_exec"] = dt
-
-            self._log_exec(op, trace_id, payload)
-
-            # 互換：TreeView._engine_exec のシグネチャに合わせる（既存の source も維持）
             self._tree._engine_exec(op, source="inspector", **payload)
 
     def _exec_and_log(self, op: str, trace_id: int, msg: str, color: str):

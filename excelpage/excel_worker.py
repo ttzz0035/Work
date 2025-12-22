@@ -517,27 +517,37 @@ class ExcelWorker(QThread):
         try:
             wb = self._active_book()
             if not wb:
-                logger.info("[ExcelWorker] move_cell ignored (no active book)")
+                logger.warning("[CUT] EXCEL_MOVE skipped (no book)")
                 return
 
             before = self._snapshot_ctx_from_com()
 
-            key = self._SK_ARROW[direction]
+            logger.warning(
+                "[CUT] EXCEL_MOVE ENTER dir=%s step=%s before=%s",
+                direction,
+                step,
+                before,
+            )
 
-            # step 回分 SendKeys
-            for _ in range(step):
+            key = self._SK_ARROW[direction]
+            for i in range(step):
+                logger.warning(
+                    "[CUT] EXCEL_MOVE SENDKEY i=%s key=%s",
+                    i,
+                    key,
+                )
                 self._app.SendKeys(key)
 
             self._update_context_cache()
             after = dict(self._ctx)
 
-            self._log_before_after("move_cell", before, after, extra=f"dir={direction}")
+            logger.warning(
+                "[CUT] EXCEL_MOVE EXIT after=%s",
+                after,
+            )
 
         except Exception as e:
-            logger.error(
-                "[ExcelWorker] move_cell failed dir=%s step=%s err=%s",
-                direction, step, e, exc_info=True
-            )
+            logger.error("[ExcelWorker] move_cell failed: %s", e, exc_info=True)
 
     # -------------------------------------------------
     # ★修正ポイント 2: Shift+Arrow は SendKeys（Excelの選択状態と完全一致）
