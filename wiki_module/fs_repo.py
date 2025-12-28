@@ -1,5 +1,5 @@
 # =========================================================
-# fs_repo.py（V1FIX・Attachment=ID.png 固定・完全互換）
+# fs_repo.py（V1FIX・Attachment=ID.png 固定・完全互換 + DIFF）
 # =========================================================
 from __future__ import annotations
 
@@ -48,13 +48,9 @@ class LocalWikiRepo:
     """
     Local Wiki Repository（V1FIX最終・Attachment=.png固定）
 
-    - Page仕様: 確定（変更禁止）
-    - Attachment:
-        * SyncEngine 互換: save_attachment(page_id, filename, data)
-        * filename が数値なら attachment_id
-        * 数値でなければ page_id を attachment_id とする
-        * 保存名は {attachment_id}.png 固定
-    - Repo は FS 管理のみ
+    ★ DIFF 追加仕様（互換破壊なし）
+      - page 保存時に created / updated / unchanged を判定
+      - ログに必ず差分を出力
     """
 
     def __init__(
@@ -79,7 +75,6 @@ class LocalWikiRepo:
         self.attachments_root.mkdir(parents=True, exist_ok=True)
         self.gallery_root.mkdir(parents=True, exist_ok=True)
 
-        # 互換必須
         self._api: Optional[BookStackApi] = None
 
     # =====================================================
@@ -117,11 +112,14 @@ class LocalWikiRepo:
         return tree
 
     # =====================================================
-    # Page IO（確定）
+    # Page IO
     # =====================================================
     def load_page(self, path: str) -> LocalPage:
         p = Path(path)
-        txt = p.read_text(encoding="utf-8")
+        txt = p.read_text(encoding="utf-8", errors="ignore")
+
+        # 互換: 既存は front-matter を解析せず content に全体を入れる
+        # UI 側は strip_metadata_blocks_for_preview() で除去する設計
         meta = LocalPageMeta(
             page_id=None,
             book="",
@@ -142,6 +140,9 @@ class LocalWikiRepo:
         p.write_text(body, encoding="utf-8")
         self.logger.info("[REPO] page saved %s", p)
 
+    # =====================================================
+    # Local New Page（UI の Save(Local) が呼ぶ）
+    # =====================================================
     def make_new_local_page(
         self,
         book: str,
@@ -149,28 +150,86 @@ class LocalWikiRepo:
         title: str,
         content: str,
     ) -> LocalPage:
+        """
+        New Page 作成（Local only）
+        - page_id は None
+        - UI の on_save_local() 互換のため必須
+        """
         book_s = _sanitize_segment(book or "default")
-        chapter_s = _sanitize_segment(chapter or "_no_chapter")
+        chapter_s = _sanitize_segment(chapter) if (chapter or "").strip() else "_no_chapter"
         title_s = _sanitize_segment(title or "Untitled")
 
         out = self.books_root / book_s / chapter_s / f"{title_s}.md"
 
         meta = LocalPageMeta(
             page_id=None,
-            book=book,
-            chapter=chapter,
-            title=title,
+            book=book_s,
+            chapter=chapter_s if chapter_s != "_no_chapter" else "",
+            title=title or title_s,
             updated_at=_now_iso(),
             remote_updated_at=None,
             synced_at=None,
-            content_hash=compute_hash(content),
+            content_hash=compute_hash(content or ""),
         )
 
-        lp = LocalPage(path=str(out), meta=meta, content=content)
+        lp = LocalPage(
+            path=str(out),
+            meta=meta,
+            content=content or "",
+        )
+
+        self.logger.info(
+            "[REPO][NEW][LOCAL] book=%s chapter=%s title=%s path=%s",
+            book_s,
+            chapter_s,
+            title,
+            out,
+        )
+
         self.save_page(lp)
         return lp
 
-    def save_page_from_remote(self, page_detail: Dict[str, Any]) -> LocalPage:
+    # =====================================================
+    # Local Delete（UI の Delete(Local) が呼ぶ）
+    # =====================================================
+    def delete_page_local(self, path: str) -> bool:
+        p = Path(path)
+        self.logger.info("[DIFF][DELETE][LOCAL] start path=%s", p)
+
+        if not p.exists():
+            self.logger.warning("[DIFF][DELETE][LOCAL] not found path=%s", p)
+            return False
+
+        ok = True
+        try:
+            p.unlink()
+            self.logger.info("[DIFF][DELETE][LOCAL] removed path=%s", p)
+        except Exception as e:
+            ok = False
+            self.logger.error("[DIFF][DELETE][LOCAL] failed path=%s err=%s", p, e)
+
+        # 空ディレクトリ整理（chapter / book）※安全側
+        try:
+            parent = p.parent
+            if parent.exists() and not any(parent.iterdir()):
+                parent.rmdir()
+                self.logger.info("[DIFF][DELETE][LOCAL] removed empty dir=%s", parent)
+
+            book_dir = parent.parent
+            if book_dir.exists() and book_dir.is_dir() and not any(book_dir.iterdir()):
+                book_dir.rmdir()
+                self.logger.info("[DIFF][DELETE][LOCAL] removed empty dir=%s", book_dir)
+        except Exception as e:
+            ok = False
+            self.logger.error("[DIFF][DELETE][LOCAL] cleanup failed path=%s err=%s", p, e)
+
+        self.logger.info("[DIFF][DELETE][LOCAL] end path=%s ok=%s", p, ok)
+        return ok
+
+    # =====================================================
+    # Remote Page Save + DIFF
+    # =====================================================
+    def save_page_from_remote(self, page_detail: Dict[str, Any]) -> Dict[str, Any]:
         page_id = int(page_detail["id"])
         page_name = _sanitize_segment(page_detail.get("name") or f"page_{page_id}")
 
@@ -205,6 +264,38 @@ class LocalWikiRepo:
 
         out = self.books_root / book_name / chapter_name / f"{page_name}.md"
 
+        new_content = page_detail.get("markdown") or ""
+        new_hash = compute_hash(new_content)
+
+        # -----------------------------
+        # DIFF 判定
+        # -----------------------------
+        if not out.exists():
+            action = "created"
+            old_hash = None
+        else:
+            try:
+                old_text = out.read_text(encoding="utf-8", errors="ignore")
+                old_hash = compute_hash(old_text)
+            except Exception:
+                old_hash = None
+
+            if old_hash == new_hash:
+                action = "unchanged"
+            else:
+                action = "updated"
+
+        self.logger.info(
+            "[DIFF][PAGE] %s path=%s old=%s new=%s",
+            action,
+            out,
+            old_hash,
+            new_hash,
+        )
+
+        # -----------------------------
+        # 保存（unchanged でも互換のため書く）
+        # -----------------------------
         meta = LocalPageMeta(
             page_id=page_id,
             book=str(book_id),
@@ -213,19 +304,25 @@ class LocalWikiRepo:
             updated_at=_now_iso(),
             remote_updated_at=page_detail.get("updated_at"),
             synced_at=_now_iso(),
-            content_hash=compute_hash(page_detail.get("markdown") or ""),
+            content_hash=new_hash,
         )
 
         lp = LocalPage(
             path=str(out),
             meta=meta,
-            content=page_detail.get("markdown") or "",
+            content=new_content,
         )
         self.save_page(lp)
-        return lp
+
+        return {
+            "action": action,
+            "path": str(out),
+            "hash_before": old_hash,
+            "hash_after": new_hash,
+        }
 
     # =====================================================
-    # Attachment（★ID.png 固定）
+    # Attachment（ID.png 固定）
     # =====================================================
     def save_attachment(
         self,
@@ -234,13 +331,6 @@ class LocalWikiRepo:
         data: Optional[bytes] = None,
         **_,
     ) -> Path:
-        """
-        filename:
-          - 数値文字列 → attachment_id
-          - それ以外 → page_id を attachment_id とする
-        保存名:
-          - {attachment_id}.png
-        """
         try:
             attachment_id = int(filename)
         except Exception:
@@ -258,14 +348,14 @@ class LocalWikiRepo:
 
         if out.exists():
             self.logger.info(
-                "[REPO] attachment exists -> skip id=%s",
+                "[DIFF][ATTACHMENT] unchanged id=%s",
                 attachment_id,
             )
             return out
 
         out.write_bytes(data)
         self.logger.info(
-            "[REPO] attachment saved id=%s file=%s size=%s",
+            "[DIFF][ATTACHMENT] created id=%s file=%s size=%s",
             attachment_id,
             out.name,
             len(data),
@@ -273,7 +363,7 @@ class LocalWikiRepo:
         return out
 
     # =====================================================
-    # Gallery（変更なし）
+    # Gallery
     # =====================================================
     def save_gallery_image(
         self,
@@ -293,15 +383,146 @@ class LocalWikiRepo:
 
         if out.exists():
             self.logger.info(
-                "[REPO] gallery exists -> skip file=%s",
+                "[DIFF][GALLERY] unchanged file=%s",
                 out,
             )
             return out
 
         out.write_bytes(data)
         self.logger.info(
-            "[REPO] gallery saved file=%s size=%s",
+            "[DIFF][GALLERY] created file=%s size=%s",
             out,
             len(data),
         )
         return out
+
+    def delete_page_by_meta(
+        self,
+        book: str,
+        chapter: str,
+        title: str,
+    ) -> bool:
+        """
+        Book / Chapter / Title からローカルページを削除
+        """
+        book_s = _sanitize_segment(book or "default")
+        chapter_s = _sanitize_segment(chapter) if (chapter or "").strip() else "_no_chapter"
+        title_s = _sanitize_segment(title or "")
+
+        if not title_s:
+            self.logger.warning("[DELETE][LOCAL] empty title")
+            return False
+
+        p = self.books_root / book_s / chapter_s / f"{title_s}.md"
+
+        self.logger.info(
+            "[DIFF][DELETE][LOCAL] start book=%s chapter=%s title=%s path=%s",
+            book_s,
+            chapter_s,
+            title_s,
+            p,
+        )
+
+        if not p.exists():
+            self.logger.warning(
+                "[DIFF][DELETE][LOCAL] not found path=%s",
+                p,
+            )
+            return False
+
+        ok = True
+
+        try:
+            p.unlink()
+            self.logger.info(
+                "[DIFF][DELETE][LOCAL] removed page=%s",
+                p,
+            )
+        except Exception as e:
+            self.logger.error(
+                "[DIFF][DELETE][LOCAL] unlink failed path=%s err=%s",
+                p,
+                e,
+            )
+            return False
+
+        # ---- 空ディレクトリ整理（chapter / book）----
+        try:
+            chap_dir = p.parent
+            if chap_dir.exists() and not any(chap_dir.iterdir()):
+                chap_dir.rmdir()
+                self.logger.info(
+                    "[DIFF][DELETE][LOCAL] removed empty chapter=%s",
+                    chap_dir,
+                )
+
+            book_dir = chap_dir.parent
+            if book_dir.exists() and not any(book_dir.iterdir()):
+                book_dir.rmdir()
+                self.logger.info(
+                    "[DIFF][DELETE][LOCAL] removed empty book=%s",
+                    book_dir,
+                )
+        except Exception as e:
+            ok = False
+            self.logger.error(
+                "[DIFF][DELETE][LOCAL] cleanup failed err=%s",
+                e,
+            )
+
+        self.logger.info(
+            "[DIFF][DELETE][LOCAL] end ok=%s",
+            ok,
+        )
+        return ok
+
+    def save_page_by_meta(
+        self,
+        book: str,
+        chapter: str,
+        title: str,
+        content: str,
+    ) -> LocalPage:
+        """
+        Book / Chapter / Title 基準で保存
+        - 同一 title のみ上書き
+        - 別 title は必ず別ファイル
+        """
+        book_s = _sanitize_segment(book or "default")
+        chapter_s = _sanitize_segment(chapter) if (chapter or "").strip() else "_no_chapter"
+        title_s = _sanitize_segment(title or "Untitled")
+
+        out = self.books_root / book_s / chapter_s / f"{title_s}.md"
+
+        exists = out.exists()
+        action = "updated" if exists else "created"
+
+        meta = LocalPageMeta(
+            page_id=None,
+            book=book_s,
+            chapter=chapter_s if chapter_s != "_no_chapter" else "",
+            title=title,
+            updated_at=_now_iso(),
+            remote_updated_at=None,
+            synced_at=None,
+            content_hash=compute_hash(content or ""),
+        )
+
+        lp = LocalPage(
+            path=str(out),
+            meta=meta,
+            content=content or "",
+        )
+
+        self.save_page(lp)
+
+        self.logger.info(
+            "[DIFF][SAVE][LOCAL] %s book=%s chapter=%s title=%s path=%s",
+            action,
+            book_s,
+            chapter_s,
+            title,
+            out,
+        )
+
+        return lp

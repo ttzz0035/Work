@@ -98,12 +98,10 @@ def _repo_root(repo: LocalWikiRepo) -> Path:
 
 
 def _wiki_root(repo: LocalWikiRepo) -> Path:
-    # repo_root の配下に wiki/ がある前提（要求パス: wiki/assets/...）
     return (_repo_root(repo) / "wiki").resolve()
 
 
 def _attachment_md_path(attachment_id: int) -> str:
-    # ★ユーザー要求: wiki/assets/attachments/61.PNG 形式
     return f"wiki/assets/attachments/{int(attachment_id)}.PNG"
 
 
@@ -198,7 +196,6 @@ def _resolve_attachment_or_gallery_src(
         logger.info("[IMG][GALLERY][URL] %s -> %s", s, md_path)
         return md_path
 
-    # 既にローカルでも「IDで読めばいい」ので正規化する（wiki/assets/... に寄せる）
     m = _LOCAL_ATTACH_ID_RE.search(s)
     if m:
         attach_id = int(m.group("id"))
@@ -215,6 +212,23 @@ def _resolve_attachment_or_gallery_src(
 
     logger.info("[IMG][SKIP] not attachment/gallery src=%s", s)
     return None
+
+
+def infer_book_chapter_from_path(path: str) -> tuple[str, str]:
+    """
+    wiki/books/<book>/<chapter>/<title>.md
+    """
+    p = Path(path).as_posix()
+    parts = p.split("/")
+
+    try:
+        idx = parts.index("books")
+    except ValueError:
+        return "", ""
+
+    book = parts[idx + 1] if len(parts) > idx + 1 else ""
+    chapter = parts[idx + 2] if len(parts) > idx + 2 else ""
+    return book, chapter
 
 
 # =========================================================
@@ -429,6 +443,12 @@ class LocalWikiApp:
         self.push_btn = ft.ElevatedButton("Push", on_click=self.on_push)
         self.reload_btn = ft.OutlinedButton("Reload", on_click=self.on_reload_tree)
         self.save_btn = ft.ElevatedButton("Save (Local)", on_click=self.on_save_local)
+        self.delete_local_btn = ft.ElevatedButton(
+            "Delete (Local)",
+            icon=ft.icons.DELETE,
+            on_click=self.on_delete_local,
+        )
+        self._delete_confirm_dialog: Optional[ft.AlertDialog] = None
 
         self.tab_preview_btn = ft.TextButton(
             "Preview", on_click=TabHandler(self, "preview").handle
@@ -446,11 +466,12 @@ class LocalWikiApp:
         self.page.theme_mode = ft.ThemeMode.DARK
         self.page.padding = 10
 
-        # ★要求パスが wiki/assets/... なので、assets_dir は repo_root を指定する
-        #   -> wiki/assets/... がそのまま解決される前提
         self.page.assets_dir = str(_repo_root(self.repo))
         self.logger.info("[FLET][ASSETS] assets_dir=%s", self.page.assets_dir)
-        self.logger.info("[FLET][ASSETS] wiki_assets=%s", str((_wiki_root(self.repo) / "assets").resolve()))
+        self.logger.info(
+            "[FLET][ASSETS] wiki_assets=%s",
+            str((_wiki_root(self.repo) / "assets").resolve()),
+        )
 
         left = ft.Column(
             [
@@ -494,7 +515,7 @@ class LocalWikiApp:
                     [self.book_field, self.chapter_field, self.title_field],
                     spacing=8,
                 ),
-                ft.Row([self.save_btn]),
+                ft.Row([self.save_btn, self.delete_local_btn]),
                 ft.Divider(),
                 ft.Row([self.tab_preview_btn, self.tab_edit_btn], spacing=10),
                 self.preview_view,
@@ -521,6 +542,44 @@ class LocalWikiApp:
         self._reload_tree()
         self._switch_tab("preview", update=False)
         self.page.update()
+
+    def _apply_page_to_ui(self, lp: LocalPage) -> None:
+        # ★ meta は信用しない。常に path から判定
+        book, chapter = infer_book_chapter_from_path(lp.path)
+        title = lp.meta.title or Path(lp.path).stem
+
+        self.logger.info(
+            "[OPEN][APPLY][PATH] path=%s book=%s chapter=%s title=%s",
+            lp.path,
+            book,
+            chapter,
+            title,
+        )
+
+        # ---- UI 反映 ----
+        self.book_field.value = book
+        self.chapter_field.value = chapter
+        self.title_field.value = title
+        self.editor.value = lp.content or ""
+
+        # TextField は明示 update
+        self.book_field.update()
+        self.chapter_field.update()
+        self.title_field.update()
+        self.editor.update()
+
+        # ---- Preview ----
+        md = render_markdown_for_flet(lp, self.repo, self.api, self.logger)
+        self.preview_view.controls = [
+            ft.Markdown(
+                value=md,
+                selectable=True,
+                extension_set=ft.MarkdownExtensionSet.GITHUB_WEB,
+            )
+        ]
+        self.preview_view.update()
+
+        self._switch_tab("preview", update=False)
 
     def _on_tree_scroll(self, e: ft.OnScrollEvent) -> None:
         self.tree_scroll_y = e.pixels
@@ -590,6 +649,7 @@ class LocalWikiApp:
         self.editor.value = "# New Page\n\nwrite here..."
         self.preview_view.controls = []
         self._switch_tab("edit")
+        self.page.update()
 
     def on_save_local(self, e) -> None:
         book = self.book_field.value or "default"
@@ -597,18 +657,18 @@ class LocalWikiApp:
         title = self.title_field.value or "Untitled"
         content = self.editor.value or ""
 
-        if self.selected_page is None:
-            lp = self.repo.make_new_local_page(book, chapter, title, content)
-            self.selected_page = lp
-            self.selected_path = lp.path
-        else:
-            lp = self.repo.load_page(self.selected_page.path)
-            lp.meta.book = book
-            lp.meta.chapter = chapter
-            lp.meta.title = title
-            lp.content = content
-            lp.meta.content_hash = compute_hash(content)
-            self.repo.save_page(lp)
+        self.logger.info(
+            "[UI][SAVE][LOCAL] book=%s chapter=%s title=%s",
+            book,
+            chapter,
+            title,
+        )
+
+        lp = self.repo.save_page_by_meta(book, chapter, title, content)
+
+        # ---- 選択状態更新（新規でも既存でも）----
+        self.selected_page = lp
+        self.selected_path = lp.path
 
         md = render_markdown_for_flet(lp, self.repo, self.api, self.logger)
         self.preview_view.controls = [
@@ -621,6 +681,15 @@ class LocalWikiApp:
 
         self._reload_tree()
         self._switch_tab("preview")
+        self.page.update()
+
+    def on_delete_local(self, e) -> None:
+        if not (self.title_field.value or "").strip():
+            self.logger.info("[UI][DELETE][LOCAL] no title")
+            return
+
+        self.logger.info("[UI][DELETE][LOCAL] open confirm dialog")
+        self._open_delete_confirm_dialog()
 
     def on_reload_tree(self, e=None) -> None:
         self._reload_tree()
@@ -630,7 +699,9 @@ class LocalWikiApp:
         self.tree_data = self.repo.build_tree_index()
 
         for book, chapters in self.tree_data.items():
-            self.tree_view.controls.append(ft.Text(f"📚 {book}", weight=ft.FontWeight.BOLD))
+            self.tree_view.controls.append(
+                ft.Text(f"📚 {book}", weight=ft.FontWeight.BOLD)
+            )
             for ch, pages in chapters.items():
                 self.tree_view.controls.append(ft.Text(f"  📁 {ch or '(no chapter)'}"))
                 for lp in pages:
@@ -645,25 +716,22 @@ class LocalWikiApp:
         self.page.update()
 
     def open_page(self, path: str) -> None:
-        lp = self.repo.load_page(path)
-        self.selected_page = lp
-        self.selected_path = path
+        try:
+            self.logger.info("[OPEN] requested path=%s", path)
 
-        self.book_field.value = lp.meta.book
-        self.chapter_field.value = lp.meta.chapter
-        self.title_field.value = lp.meta.title
-        self.editor.value = lp.content
+            lp = self.repo.load_page(path)
+            self.selected_page = lp
+            self.selected_path = path
 
-        md = render_markdown_for_flet(lp, self.repo, self.api, self.logger)
-        self.preview_view.controls = [
-            ft.Markdown(
-                value=md,
-                selectable=True,
-                extension_set=ft.MarkdownExtensionSet.GITHUB_WEB,
-            )
-        ]
+            self._apply_page_to_ui(lp)
 
-        self._switch_tab("preview")
+            self.page.update()
+
+            self.logger.info("[OPEN] done path=%s", path)
+        except Exception as ex:
+            self.logger.error("[OPEN][FAIL] path=%s err=%s", path, ex)
+            self.status_text.value = f"open failed: {ex}"
+            self.page.update()
 
     def _load_config(self, path: str) -> AppConfig:
         raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
@@ -672,6 +740,91 @@ class LocalWikiApp:
             local=LocalConfig(**raw["local"]),
             sync=SyncConfig(**raw["sync"]),
         )
+
+    def _open_delete_confirm_dialog(self) -> None:
+        book = self.book_field.value or ""
+        chapter = self.chapter_field.value or ""
+        title = self.title_field.value or ""
+
+        self.logger.info(
+            "[UI][DELETE][CONFIRM] open book=%s chapter=%s title=%s",
+            book,
+            chapter,
+            title,
+        )
+
+        def _cancel(e):
+            self.logger.info("[UI][DELETE][CONFIRM] canceled")
+            if self.page.dialog:
+                self.page.dialog.open = False
+            self.page.update()
+
+        def _confirm(e):
+            self.logger.info("[UI][DELETE][CONFIRM] confirmed")
+            if self.page.dialog:
+                self.page.dialog.open = False
+            self.page.update()
+            self._delete_local_confirmed()
+
+        self._delete_confirm_dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Delete page (Local)"),
+            content=ft.Text(
+                f"本当に削除しますか？\n\n"
+                f"Book: {book}\n"
+                f"Chapter: {chapter or '(no chapter)'}\n"
+                f"Title: {title}"
+            ),
+            actions=[
+                ft.TextButton("Cancel", on_click=_cancel),
+                ft.ElevatedButton("Delete", on_click=_confirm),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+
+        self.page.dialog = self._delete_confirm_dialog
+        self.page.dialog.open = True
+        self.page.update()
+
+    def _delete_local_confirmed(self) -> None:
+        book = self.book_field.value or ""
+        chapter = self.chapter_field.value or ""
+        title = self.title_field.value or ""
+
+        self.logger.info(
+            "[UI][DELETE][LOCAL] confirmed book=%s chapter=%s title=%s",
+            book,
+            chapter,
+            title,
+        )
+
+        ok = self.repo.delete_page_by_meta(book, chapter, title)
+
+        if not ok:
+            self.status_text.value = "delete failed"
+            self.page.update()
+            return
+
+        # ---- UI 状態クリア ----
+        self.selected_page = None
+        self.selected_path = None
+
+        self.book_field.value = ""
+        self.chapter_field.value = ""
+        self.title_field.value = ""
+        self.editor.value = ""
+        self.preview_view.controls = []
+
+        self.book_field.update()
+        self.chapter_field.update()
+        self.title_field.update()
+        self.editor.update()
+        self.preview_view.update()
+
+        self._reload_tree()
+
+        self.status_text.value = "deleted (local)"
+        self.page.update()
 
 
 class WorkerRunner:
@@ -694,6 +847,8 @@ class OpenHandler:
         self.path = path
 
     def handle(self, e):
+        # 「呼ばれてない」を確実に潰す
+        self.app.logger.info("[CLICK][OPEN] path=%s", self.path)
         self.app.open_page(self.path)
 
 
