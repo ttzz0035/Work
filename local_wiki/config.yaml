@@ -1,0 +1,16 @@
+bookstack:
+  base_url: "http://192.168.100.50:6875"
+  token_id: "4AgnxCcSEMSBzH0kxNE8wZGMH7N9keFh"
+  token_secret: "Kod7Oi0AhUtwcTRMDcUsHzWi0WbV0KWx"
+  verify_ssl: true
+  timeout_sec: 20
+
+local:
+  repo_root: "./wiki"
+  assets_dir: "./wiki/assets"
+
+sync:
+  per_page: 1000
+  stop_on_conflict: false
+  create_missing_books: true
+  create_missing_chapters: true
