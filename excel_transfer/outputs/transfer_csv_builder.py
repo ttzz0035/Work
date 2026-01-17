@@ -204,6 +204,7 @@ class TransferCsvBuilderDialog(tk.Toplevel):
         self.geometry("1500x850")
 
         self._build()
+        self._bind_table_keys()
 
     # ---------- focus restore ----------
     def _restore_focus(self):
@@ -252,7 +253,7 @@ class TransferCsvBuilderDialog(tk.Toplevel):
         tv = ttk.Frame(conf)
         tv.grid(row=0, column=0, sticky="nsew")
 
-        self.table = ttk.Treeview(tv, columns=self.HEADERS, show="headings")
+        self.table = ttk.Treeview(tv, columns=self.HEADERS, show="headings", selectmode="extended")
         for h in self.HEADERS:
             self.table.heading(h, text=h)
             self.table.column(h, width=140, anchor="center")
@@ -283,6 +284,30 @@ class TransferCsvBuilderDialog(tk.Toplevel):
 
         self.src_canvas.set_sync_target(self.dst_canvas)
         self.dst_canvas.set_sync_target(self.src_canvas)
+
+    # =================================================
+    # ★ 追加：確定テーブルのキー操作
+    # =================================================
+    def _bind_table_keys(self):
+        self.table.bind("<Control-a>", self._select_all_rows)
+        self.table.bind("<Control-A>", self._select_all_rows)
+        self.table.bind("<Delete>", self._delete_selected_rows)
+        self.table.bind("<BackSpace>", self._delete_selected_rows)
+
+    def _select_all_rows(self, event=None):
+        if self.focus_get() is not self.table:
+            return "break"
+        items = self.table.get_children()
+        if items:
+            self.table.selection_set(items)
+        return "break"
+
+    def _delete_selected_rows(self, event=None):
+        if self.focus_get() is not self.table:
+            return "break"
+        for iid in self.table.selection():
+            self.table.delete(iid)
+        return "break"
 
     # =================================================
     def _build_side(self, paned, is_src):
@@ -422,6 +447,7 @@ class TransferCsvBuilderDialog(tk.Toplevel):
         lines = [",".join(self.HEADERS)]
         for iid in self.table.get_children():
             lines.append(",".join(map(str, self.table.item(iid)["values"])))
+
 
         Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8-sig")
 

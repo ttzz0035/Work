@@ -24,7 +24,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="diff_main",
+    name="main_diff",
     console=True,
 )
 
