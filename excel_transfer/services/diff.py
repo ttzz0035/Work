@@ -1,46 +1,15 @@
 from __future__ import annotations
 
+import json
 import os
-import sys
-import shutil
-from typing import Tuple, Dict, Any, List
+from typing import Any, Dict, List, Tuple
 
-# =====================================================
-# project root 探索（models/dto.py を基準に決定）
-# =====================================================
-_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-
-
-def _resolve_project_root(start: str) -> str:
-    cur = start
-    for _ in range(10):
-        cand = os.path.join(cur, "models", "dto.py")
-        if os.path.isfile(cand):
-            return cur
-        parent = os.path.dirname(cur)
-        if parent == cur:
-            break
-        cur = parent
-    raise RuntimeError("project root not found (models/dto.py not found)")
-
-
-_PROJECT_ROOT = _resolve_project_root(_THIS_DIR)
-if _PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, _PROJECT_ROOT)
-
-# =====================================================
-# imports
-# =====================================================
 import xlwings as xw
-from openpyxl import load_workbook
-from openpyxl.styles import PatternFill, Border, Side
 
 from models.dto import DiffRequest, LogFn
+from datetime import datetime
 
 
-# =====================================================
-# Excel Diff Service
-# =====================================================
 class ExcelDiffService:
     def __init__(self, req: DiffRequest, logger, append_log: LogFn):
         self.req = req
@@ -48,155 +17,212 @@ class ExcelDiffService:
         self.append_log = append_log
 
         self.diff_cells: List[Tuple[int, int]] = []
-        self.diff_shapes: List[str] = []
-        self.out_file: str = ""
+        self.diff_shapes: List[Dict[str, Any]] = []
+
+        self._meta: Dict[str, Any] = {}
+        self._summary: Dict[str, Any] = {}
+
+    # -------------------------------------------------
+    # logging
+    # -------------------------------------------------
+    def _log(self, msg: str) -> None:
+        try:
+            self.append_log(msg)
+        except Exception:
+            pass
+        try:
+            if self.logger:
+                self.logger.info(msg)
+        except Exception:
+            pass
+
+    def _log_err(self, msg: str) -> None:
+        try:
+            self.append_log(msg)
+        except Exception:
+            pass
+        try:
+            if self.logger:
+                self.logger.error(msg)
+        except Exception:
+            pass
 
     # -------------------------------------------------
     # public
     # -------------------------------------------------
     def run(self) -> str:
-        self.append_log("=== Diff開始 ===")
+        self._log("=== Diff開始 ===")
 
-        if not os.path.exists(self.req.file_a):
-            raise ValueError(f"file not found: {self.req.file_a}")
-        if not os.path.exists(self.req.file_b):
-            raise ValueError(f"file not found: {self.req.file_b}")
+        if not self.req.range_a or not self.req.range_b:
+            raise ValueError("range_a / range_b は必須です（空不可）")
 
-        if not getattr(self.req, "range", None):
-            raise ValueError("比較範囲が指定されていません（例: A1:AN65535）")
+        base = str(getattr(self.req, "base_file", "B") or "B").upper()
+        if base not in ("A", "B"):
+            base = "B"
 
-        self.out_file = os.path.splitext(self.req.file_b)[0] + "_DIFF.xlsx"
-        shutil.copyfile(self.req.file_b, self.out_file)
-        self.append_log(f"[INFO] 出力ファイル: {self.out_file}")
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-        self._diff_excel()
+            base_path = self.req.file_a if base == "A" else self.req.file_b
+            base_root, base_ext = os.path.splitext(base_path)
 
-        if self.diff_cells:
-            self._mark_cells_red()
-            self.append_log(f"[OK] セル差分 {len(self.diff_cells)} 件を赤色反映")
+            diff_path = f"{base_root}_DIFF_{ts}{base_ext}"
+            json_path = f"{base_root}_DIFF_{ts}.json"
 
-        if self.diff_shapes:
-            self._mark_shapes_red()
-            self.append_log(f"[OK] 図形差分 {len(self.diff_shapes)} 件を赤枠反映")
+        self._meta = {
+            "file_a": self.req.file_a,
+            "file_b": self.req.file_b,
+            "range_a": self.req.range_a,
+            "range_b": self.req.range_b,
+            "base_file": base,
+            "compare_formula": bool(getattr(self.req, "compare_formula", False)),
+            "compare_shapes": bool(getattr(self.req, "compare_shapes", False)),
+        }
 
-        self.append_log("=== Diff完了 ===")
-        return self.out_file
-
-    # -------------------------------------------------
-    # core diff
-    # -------------------------------------------------
-    def _diff_excel(self) -> None:
-        app_a = app_b = None
-        book_a = book_b = None
+        app = None
+        book_base = None
+        book_other = None
 
         try:
-            app_a = xw.App(visible=False, add_book=False)
-            app_b = xw.App(visible=False, add_book=False)
+            app = xw.App(visible=False, add_book=False)
 
-            book_a = app_a.books.open(self.req.file_a, read_only=True)
-            book_b = app_b.books.open(self.req.file_b, read_only=True)
+            # ベースを直接編集（最後に SaveAs）
+            book_base = app.books.open(base_path)
+            book_other = app.books.open(other_path, read_only=True)
 
-            sheet_a = getattr(self.req, "sheet_a", "")
-            sheet_b = getattr(self.req, "sheet_b", "")
+            sht_base = book_base.sheets[0]
+            sht_other = book_other.sheets[0]
 
-            sht_a = self._sheet_or_first(book_a, sheet_a)
-            sht_b = self._sheet_or_first(book_b, sheet_b)
+            # セル差分検出
+            self._diff_cells_core(sht_base, sht_other)
+            self._mark_cells_red_xlwings(sht_base)
 
-            rng = self.req.range
-            self.append_log(f"[INFO] 比較シート: {sht_a.name} ↔ {sht_b.name}")
-            self.append_log(f"[INFO] 比較範囲: {rng}")
+            # 図形差分（JSON 用）
+            if bool(getattr(self.req, "compare_shapes", False)):
+                self._diff_shapes_core(sht_base, sht_other)
+                self._mark_shapes_red(book_base)
 
-            data_a = self._read_range(sht_a, rng)
-            data_b = self._read_range(sht_b, rng)
+            # ★ 別名保存（元ファイル非破壊）
+            book_base.save(diff_path)
 
-            rows = sorted(set(data_a.keys()) | set(data_b.keys()))
-
-            for r in rows:
-                row_a = data_a.get(r, {})
-                row_b = data_b.get(r, {})
-
-                if not row_a and row_b:
-                    self.append_log(f"[ADD] row={r}")
-                    continue
-                if row_a and not row_b:
-                    self.append_log(f"[DEL] row={r}")
-                    continue
-
-                for c in sorted(set(row_a.keys()) | set(row_b.keys())):
-                    va = row_a.get(c)
-                    vb = row_b.get(c)
-                    if va != vb:
-                        self.append_log(f"[MOD] r={r} c={c} A={va} B={vb}")
-                        self.diff_cells.append((r, c))
-
-            if self.req.compare_shapes:
-                self.append_log("[INFO] 図形・画像比較開始")
-                sa = self._read_shapes(sht_a)
-                sb = self._read_shapes(sht_b)
-
-                for name in sa.keys() - sb.keys():
-                    self.append_log(f"[SHAPE-DEL] {name}")
-                for name in sb.keys() - sa.keys():
-                    self.append_log(f"[SHAPE-ADD] {name}")
-                    self.diff_shapes.append(name)
-                for name in sa.keys() & sb.keys():
-                    if sa[name] != sb[name]:
-                        self.append_log(f"[SHAPE-MOD] {name}")
-                        self.diff_shapes.append(name)
+        except Exception as ex:
+            self._log_err(f"[ERR] Diff: {ex}")
+            raise
 
         finally:
-            for book in (book_a, book_b):
-                try:
-                    if book:
-                        book.close()
-                except Exception:
-                    pass
-            for app in (app_a, app_b):
-                try:
-                    if app:
-                        app.kill()
-                except Exception:
-                    pass
+            try:
+                if book_other:
+                    book_other.close()
+            except Exception:
+                pass
+            try:
+                if book_base:
+                    book_base.close()
+            except Exception:
+                pass
+            try:
+                if app:
+                    app.quit()
+            except Exception:
+                pass
+
+        self._summary = {
+            "cell_mod_count": len(self.diff_cells),
+            "shape_diff_count": len(self.diff_shapes),
+            "base_file": base,
+        }
+
+        self._write_json(json_path)
+
+        self._log(f"[OK] 出力ファイル: {diff_path}")
+        self._log("=== Diff完了 ===")
+        return diff_path
+
+    # -------------------------------------------------
+    # cell diff
+    # -------------------------------------------------
+    def _diff_cells_core(self, sht_base: xw.Sheet, sht_other: xw.Sheet) -> None:
+        base = self._meta["base_file"]
+
+        data_base = self._read_range(
+            sht_base,
+            self.req.range_b if base == "B" else self.req.range_a,
+        )
+        data_other = self._read_range(
+            sht_other,
+            self.req.range_a if base == "B" else self.req.range_b,
+        )
+
+        rows = sorted(set(data_base) | set(data_other))
+        total = len(rows)
+
+        for i, r in enumerate(rows, 1):
+            row_a = data_base.get(r, {})
+            row_b = data_other.get(r, {})
+
+            for c in sorted(set(row_a) | set(row_b)):
+                if row_a.get(c) != row_b.get(c):
+                    self.diff_cells.append((r, c))
+                    self._log(
+                        f"[MOD] cell r={r} c={c} A={row_a.get(c)} B={row_b.get(c)}"
+                    )
+
+            if i % 500 == 0 or i == total:
+                self._log(f"[PROGRESS] cells {i}/{total}")
+
+    # -------------------------------------------------
+    # shape diff (JSON only)
+    # -------------------------------------------------
+    def _diff_shapes_core(self, sht_base: xw.Sheet, sht_other: xw.Sheet) -> None:
+        self._log("[INFO] 図形比較開始")
+
+        shapes_base = self._read_shapes(sht_base)
+        shapes_other = self._read_shapes(sht_other)
+
+        for name in sorted(set(shapes_base) | set(shapes_other)):
+            a = shapes_base.get(name)
+            b = shapes_other.get(name)
+
+            if a is None and b is not None:
+                self.diff_shapes.append(
+                    {"type": "SHAPE_ADD", "name": name, "a": None, "b": b}
+                )
+                self._log(f"[SHAPE-ADD] {name}")
+
+            elif a is not None and b is None:
+                self.diff_shapes.append(
+                    {"type": "SHAPE_DEL", "name": name, "a": a, "b": None}
+                )
+                self._log(f"[SHAPE-DEL] {name}")
+
+            elif a != b:
+                self.diff_shapes.append(
+                    {"type": "SHAPE_MOD", "name": name, "a": a, "b": b}
+                )
+                self._log(f"[SHAPE-MOD] {name}")
 
     # -------------------------------------------------
     # helpers
     # -------------------------------------------------
-    def _sheet_or_first(self, book: xw.Book, name: str):
-        return book.sheets[name] if name else book.sheets[0]
-
     def _read_range(self, sht: xw.Sheet, rng: str) -> Dict[int, Dict[int, Any]]:
-        """
-        指定レンジをそのまま読み込み、
-        完全空行は除外して dict[row][col] 形式で返す
-        """
         area = sht.range(rng)
-        values = area.value
+        values = area.formula if getattr(self.req, "compare_formula", False) else area.value
 
-        if not values or not isinstance(values, list):
-            return {}
-
+        out: Dict[int, Dict[int, Any]] = {}
         start_row = area.row
         start_col = area.column
 
-        out: Dict[int, Dict[int, Any]] = {}
+        self._log(f"[READ] start sheet={sht.name} range={rng}")
 
         for r_off, row in enumerate(values):
             if not isinstance(row, list):
                 row = [row]
-
             if not any(v is not None for v in row):
-                continue  # 完全空行は無視
+                continue
 
-            r_idx = start_row + r_off
-            row_dict: Dict[int, Any] = {}
+            r = start_row + r_off
+            out[r] = {start_col + c: v for c, v in enumerate(row)}
 
-            for c_off, _ in enumerate(row):
-                cell = sht.range((r_idx, start_col + c_off))
-                v = cell.formula if self.req.compare_formula else cell.value
-                row_dict[start_col + c_off] = v
-
-            out[r_idx] = row_dict
-
+        self._log(f"[READ] done sheet={sht.name}")
         return out
 
     def _read_shapes(self, sht: xw.Sheet) -> Dict[str, Dict[str, Any]]:
@@ -204,57 +230,66 @@ class ExcelDiffService:
         for shp in sht.api.Shapes:
             try:
                 out[str(shp.Name)] = {
-                    "top": shp.Top,
-                    "left": shp.Left,
-                    "width": shp.Width,
-                    "height": shp.Height,
+                    "top": float(shp.Top),
+                    "left": float(shp.Left),
+                    "width": float(shp.Width),
+                    "height": float(shp.Height),
+                    "rotation": float(shp.Rotation),
+                    "text": getattr(shp.TextFrame.Characters(), "Text", ""),
                 }
-            except Exception:
-                pass
+            except Exception as e:
+                self._log(f"[SHAPE-READ-ERR] {e}")
         return out
 
     # -------------------------------------------------
-    # excel mark
+    # mark (xlwings only)
     # -------------------------------------------------
-    def _mark_cells_red(self) -> None:
-        wb = load_workbook(self.out_file)
-        ws = wb.active
-
-        red_fill = PatternFill(start_color="FFFF6666", end_color="FFFF6666", fill_type="solid")
-        red_border = Border(
-            left=Side(style="thin", color="FF0000"),
-            right=Side(style="thin", color="FF0000"),
-            top=Side(style="thin", color="FF0000"),
-            bottom=Side(style="thin", color="FF0000"),
-        )
-
+    def _mark_cells_red_xlwings(self, sht: xw.Sheet) -> None:
         for r, c in self.diff_cells:
-            cell = ws.cell(row=int(r), column=int(c))
-            cell.fill = red_fill
-            cell.border = red_border
+            try:
+                cell = sht.cells(r, c)
+                cell.api.Interior.Color = 0x6666FF  # 赤系
+                cell.api.Borders.Weight = 2
+            except Exception as e:
+                self._log(f"[CELL-MARK-ERR] r={r} c={c} err={e}")
 
-        wb.save(self.out_file)
+    def _mark_shapes_red(self, book: xw.Book) -> None:
+        sht = book.sheets[0]
+        targets = {
+            d["name"] for d in self.diff_shapes if d.get("type") == "SHAPE_MOD"
+        }
 
-    def _mark_shapes_red(self) -> None:
-        app = xw.App(visible=False, add_book=False)
-        try:
-            book = app.books.open(self.out_file)
-            sht = book.sheets[0]
-            for shp in sht.api.Shapes:
-                if str(shp.Name) in self.diff_shapes:
-                    try:
-                        shp.Line.ForeColor.RGB = 255
-                    except Exception:
-                        pass
-            book.save()
-            book.close()
-        finally:
-            app.kill()
+        for shp in sht.api.Shapes:
+            if str(shp.Name) in targets:
+                try:
+                    shp.Line.Visible = True
+                    shp.Line.ForeColor.RGB = 255  # 赤
+                    shp.Line.Weight = 2
+                except Exception as e:
+                    self._log(f"[SHAPE-MARK-ERR] {e}")
+
+    # -------------------------------------------------
+    # json
+    # -------------------------------------------------
+    def _write_json(self, path: str) -> None:
+        payload = {
+            "meta": self._meta,
+            "summary": self._summary,
+            "diff_cells": [
+                {
+                    "type": "MOD",
+                    "mark": {"row": r, "col": c, "base": self._meta["base_file"]},
+                }
+                for r, c in self.diff_cells
+            ],
+            "diff_shapes": self.diff_shapes,
+        }
+
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+
+        self._log(f"[OK] JSON出力: {path}")
 
 
-# =====================================================
-# 既存互換API（ExcelApp 用）
-# =====================================================
 def run_diff(req: DiffRequest, ctx, logger, append_log: LogFn) -> str:
-    svc = ExcelDiffService(req, logger, append_log)
-    return svc.run()
+    return ExcelDiffService(req, logger, append_log).run()
