@@ -1,7 +1,8 @@
 # excel_transfer/utils/configs.py
-import os, yaml, json
+import os, yaml, json, configparser
 from dataclasses import dataclass
 from typing import Dict, Any
+
 
 def _load_yaml(path: str, default=None):
     if not os.path.exists(path):
@@ -9,10 +10,12 @@ def _load_yaml(path: str, default=None):
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
 
+
 def _save_yaml(path: str, data: dict):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         yaml.dump(data, f, allow_unicode=True)
+
 
 @dataclass
 class AppContext:
@@ -24,14 +27,18 @@ class AppContext:
     user_paths: Dict[str, Any]
     user_paths_file: str
 
+    # ★ 追加（これだけ）
+    tabs_enabled: Dict[str, bool]
+
     def save_user_path(self, key: str, value: str):
         self.user_paths[key] = value
         _save_yaml(self.user_paths_file, self.user_paths)
 
     def default_dir_for(self, current: str = "") -> str:
-        if current and os.path.exists(os.path.dirname(current)): 
+        if current and os.path.exists(os.path.dirname(current)):
             return os.path.dirname(current)
         return self.app_settings.get("app", {}).get("default_dir", "") or self.base_dir
+
 
 def load_context(base_dir: str, logger) -> AppContext:
     config_dir = os.path.join(base_dir, "data", "config")
@@ -51,7 +58,6 @@ def load_context(base_dir: str, logger) -> AppContext:
         }
     })
 
-    # ★ labels.yaml → label.yml に変更
     labels = _load_yaml(os.path.join(config_dir, "label.yml"), default={
         "ja": {
             "app_title": "Excel ユーティリティ（転記 / Grep / Diff / Count）",
@@ -75,6 +81,23 @@ def load_context(base_dir: str, logger) -> AppContext:
     user_paths_file = os.path.join(base_dir, "user_paths.yaml")
     user_paths = _load_yaml(user_paths_file, default={})
 
+    # ==================================================
+    # ★ ここから追加（INI Tabs 読み取り）
+    # ==================================================
+    tabs_enabled: Dict[str, bool] = {}
+    ini_path = os.path.join(base_dir, "config.ini")
+    if os.path.exists(ini_path):
+        config = configparser.ConfigParser()
+        config.read(ini_path, encoding="utf-8")
+        if "Tabs" in config:
+            for k, v in config["Tabs"].items():
+                enabled = v.lower() == "true"
+                tabs_enabled[k] = enabled
+                logger.info(f"[CONFIG] tab {k} enabled={enabled}")
+    else:
+        logger.info("[CONFIG] config.ini not found (tab filter disabled)")
+    # ==================================================
+
     return AppContext(
         base_dir=base_dir,
         output_dir=output_dir,
@@ -82,5 +105,6 @@ def load_context(base_dir: str, logger) -> AppContext:
         labels=labels,
         app_settings=app_settings,
         user_paths=user_paths,
-        user_paths_file=user_paths_file
+        user_paths_file=user_paths_file,
+        tabs_enabled=tabs_enabled,   # ★ 追加
     )

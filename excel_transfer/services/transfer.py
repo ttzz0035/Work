@@ -183,7 +183,7 @@ def run_transfer_from_csvs(req: TransferRequest, ctx, logger, append_log: LogFn)
             app.api.ScreenUpdating = False
             app.api.DisplayAlerts = False
             app.api.EnableEvents = False
-            app.api.Calculation = -4135  # xlCalculationManual
+            # app.api.Calculation = -4135  # xlCalculationManual
 
             _log(append_log, "INFO", "EXCEL_APP_START", mode="fast")
 

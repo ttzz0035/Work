@@ -405,7 +405,7 @@ class ExcelApp:
         self.transfer_tab = TransferTab(self)
         self.grep_tab = GrepTab(self)
         self.diff_tab = DiffTab(self)
-        self.count_tab = CountTab(self)   # ← ★ これだけ
+        self.count_tab = CountTab(self)
 
         log_frame = ttk.Frame(self.root)
         log_frame.pack(fill="both", expand=False, padx=4, pady=(2, 4))
