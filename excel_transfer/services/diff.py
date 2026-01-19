@@ -56,17 +56,25 @@ class ExcelDiffService:
         if not self.req.range_a or not self.req.range_b:
             raise ValueError("range_a / range_b は必須です（空不可）")
 
+        # --- base 正規化 ---
         base = str(getattr(self.req, "base_file", "B") or "B").upper()
         if base not in ("A", "B"):
             base = "B"
 
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # --- paths（常に定義される） ---
+        base_path = self.req.file_a if base == "A" else self.req.file_b
+        other_path = self.req.file_b if base == "A" else self.req.file_a
 
-            base_path = self.req.file_a if base == "A" else self.req.file_b
-            base_root, base_ext = os.path.splitext(base_path)
+        if not base_path or not os.path.exists(base_path):
+            raise ValueError(f"invalid base_path: {base_path}")
+        if not other_path or not os.path.exists(other_path):
+            raise ValueError(f"invalid other_path: {other_path}")
 
-            diff_path = f"{base_root}_DIFF_{ts}{base_ext}"
-            json_path = f"{base_root}_DIFF_{ts}.json"
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        base_root, base_ext = os.path.splitext(base_path)
+
+        diff_path = f"{base_root}_DIFF_{ts}{base_ext}"
+        json_path = f"{base_root}_DIFF_{ts}.json"
 
         self._meta = {
             "file_a": self.req.file_a,
@@ -83,25 +91,29 @@ class ExcelDiffService:
         book_other = None
 
         try:
+            self._log(f"[PATH] base_path={base_path}")
+            self._log(f"[PATH] other_path={other_path}")
+
             app = xw.App(visible=False, add_book=False)
 
-            # ベースを直接編集（最後に SaveAs）
             book_base = app.books.open(base_path)
+            if book_base is None:
+                raise RuntimeError(f"failed to open base excel: {base_path}")
+
             book_other = app.books.open(other_path, read_only=True)
+            if book_other is None:
+                raise RuntimeError(f"failed to open other excel: {other_path}")
 
             sht_base = book_base.sheets[0]
             sht_other = book_other.sheets[0]
 
-            # セル差分検出
             self._diff_cells_core(sht_base, sht_other)
             self._mark_cells_red_xlwings(sht_base)
 
-            # 図形差分（JSON 用）
             if bool(getattr(self.req, "compare_shapes", False)):
                 self._diff_shapes_core(sht_base, sht_other)
                 self._mark_shapes_red(book_base)
 
-            # ★ 別名保存（元ファイル非破壊）
             book_base.save(diff_path)
 
         except Exception as ex:
