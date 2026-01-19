@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
 import xlwings as xw
 
 from models.dto import DiffRequest, LogFn
 from datetime import datetime
+import shutil
 
 
 class ExcelDiffService:
@@ -16,7 +17,8 @@ class ExcelDiffService:
         self.logger = logger
         self.append_log = append_log
 
-        self.diff_cells: List[Tuple[int, int]] = []
+        # 変更: diff_cells は dict を持つ
+        self.diff_cells: List[Dict[str, Any]] = []
         self.diff_shapes: List[Dict[str, Any]] = []
 
         self._meta: Dict[str, Any] = {}
@@ -61,7 +63,6 @@ class ExcelDiffService:
         if base not in ("A", "B"):
             base = "B"
 
-        # --- paths（常に定義される） ---
         base_path = self.req.file_a if base == "A" else self.req.file_b
         other_path = self.req.file_b if base == "A" else self.req.file_a
 
@@ -76,6 +77,10 @@ class ExcelDiffService:
         diff_path = f"{base_root}_DIFF_{ts}{base_ext}"
         json_path = f"{base_root}_DIFF_{ts}.json"
 
+        # ★ ファイルコピー（ここが重要）
+        self._log(f"[COPY] {base_path} -> {diff_path}")
+        shutil.copy2(base_path, diff_path)
+
         self._meta = {
             "file_a": self.req.file_a,
             "file_b": self.req.file_b,
@@ -87,34 +92,30 @@ class ExcelDiffService:
         }
 
         app = None
-        book_base = None
+        book_diff = None
         book_other = None
 
         try:
-            self._log(f"[PATH] base_path={base_path}")
-            self._log(f"[PATH] other_path={other_path}")
-
             app = xw.App(visible=False, add_book=False)
 
-            book_base = app.books.open(base_path)
-            if book_base is None:
-                raise RuntimeError(f"failed to open base excel: {base_path}")
-
+            # ★ 編集対象は DIFF のみ
+            book_diff = app.books.open(diff_path)
             book_other = app.books.open(other_path, read_only=True)
-            if book_other is None:
-                raise RuntimeError(f"failed to open other excel: {other_path}")
 
-            sht_base = book_base.sheets[0]
+            sht_diff = book_diff.sheets[0]
             sht_other = book_other.sheets[0]
 
-            self._diff_cells_core(sht_base, sht_other)
-            self._mark_cells_red_xlwings(sht_base)
+            # セル差分
+            self._diff_cells_core(sht_diff, sht_other)
+            self._mark_cells_red_xlwings(sht_diff)
 
+            # 図形差分（JSON主体／Excelは補助）
             if bool(getattr(self.req, "compare_shapes", False)):
-                self._diff_shapes_core(sht_base, sht_other)
-                self._mark_shapes_red(book_base)
+                self._diff_shapes_core(sht_diff, sht_other)
+                self._mark_shapes_red(book_diff)
 
-            book_base.save(diff_path)
+            # ★ copy 済みなので save は不要（安全）
+            book_diff.save()
 
         except Exception as ex:
             self._log_err(f"[ERR] Diff: {ex}")
@@ -127,8 +128,8 @@ class ExcelDiffService:
             except Exception:
                 pass
             try:
-                if book_base:
-                    book_base.close()
+                if book_diff:
+                    book_diff.close()
             except Exception:
                 pass
             try:
@@ -172,10 +173,23 @@ class ExcelDiffService:
             row_b = data_other.get(r, {})
 
             for c in sorted(set(row_a) | set(row_b)):
-                if row_a.get(c) != row_b.get(c):
-                    self.diff_cells.append((r, c))
+                va = row_a.get(c)
+                vb = row_b.get(c)
+                if va != vb:
+                    self.diff_cells.append(
+                        {
+                            "type": "MOD",
+                            "mark": {
+                                "row": r,
+                                "col": c,
+                                "base": base,
+                            },
+                            "value_a": "" if va is None else str(va),
+                            "value_b": "" if vb is None else str(vb),
+                        }
+                    )
                     self._log(
-                        f"[MOD] cell r={r} c={c} A={row_a.get(c)} B={row_b.get(c)}"
+                        f"[MOD] cell r={r} c={c} A={va} B={vb}"
                     )
 
             if i % 500 == 0 or i == total:
@@ -257,10 +271,12 @@ class ExcelDiffService:
     # mark (xlwings only)
     # -------------------------------------------------
     def _mark_cells_red_xlwings(self, sht: xw.Sheet) -> None:
-        for r, c in self.diff_cells:
+        for d in self.diff_cells:
+            r = d["mark"]["row"]
+            c = d["mark"]["col"]
             try:
                 cell = sht.cells(r, c)
-                cell.api.Interior.Color = 0x6666FF  # 赤系
+                cell.api.Interior.Color = 0x6666FF
                 cell.api.Borders.Weight = 2
             except Exception as e:
                 self._log(f"[CELL-MARK-ERR] r={r} c={c} err={e}")
@@ -275,7 +291,7 @@ class ExcelDiffService:
             if str(shp.Name) in targets:
                 try:
                     shp.Line.Visible = True
-                    shp.Line.ForeColor.RGB = 255  # 赤
+                    shp.Line.ForeColor.RGB = 255
                     shp.Line.Weight = 2
                 except Exception as e:
                     self._log(f"[SHAPE-MARK-ERR] {e}")
@@ -287,13 +303,7 @@ class ExcelDiffService:
         payload = {
             "meta": self._meta,
             "summary": self._summary,
-            "diff_cells": [
-                {
-                    "type": "MOD",
-                    "mark": {"row": r, "col": c, "base": self._meta["base_file"]},
-                }
-                for r, c in self.diff_cells
-            ],
+            "diff_cells": self.diff_cells,
             "diff_shapes": self.diff_shapes,
         }
 
