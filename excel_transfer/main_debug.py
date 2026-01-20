@@ -1,10 +1,21 @@
 # excel_transfer/main.py
 import os
 import sys
+import traceback
 
 from utils.log import init_logger
 from utils.configs import load_context
 from ui.app import ExcelApp
+
+
+class _EmptyContext:
+    """
+    ライセンス・INI・設定が一切なくても
+    アプリを起動させるための最小 Context
+    """
+    def __init__(self):
+        self.tabs_enabled = None
+        self.license_manager = None
 
 
 def main():
@@ -17,12 +28,23 @@ def main():
         base_dir = os.path.dirname(os.path.abspath(__file__))
 
     # ----------------------------------------
-    # logger / context
+    # logger
     # ----------------------------------------
     logger = init_logger(base_dir)
-    ctx = load_context(base_dir, logger)
-
     logger.info(f"[MAIN] base_dir={base_dir}")
+
+    # ----------------------------------------
+    # context（license / ini が無くても起動）
+    # ----------------------------------------
+    try:
+        ctx = load_context(base_dir, logger)
+        logger.info("[MAIN] context loaded")
+    except Exception as ex:
+        logger.warning(
+            "[MAIN] load_context failed -> start without license/config\n"
+            + "".join(traceback.format_exception_only(type(ex), ex)).strip()
+        )
+        ctx = _EmptyContext()
 
     # ----------------------------------------
     # App 起動（全タブ生成）
@@ -30,21 +52,19 @@ def main():
     app = ExcelApp(ctx, logger)
 
     # ----------------------------------------
-    # INI による後削除（先頭からの index のみ）
+    # INI によるタブ削除（存在する場合のみ）
     # ----------------------------------------
-    if ctx.tabs_enabled:
+    if getattr(ctx, "tabs_enabled", None):
         tab_count = app.nb.index("end")
         logger.info(f"[MAIN] tab count={tab_count}")
 
         for i in reversed(range(tab_count)):
             try:
-                tab_key = f"tab{i + 1}"  # idx=0 -> tab1
-
+                tab_key = f"tab{i + 1}"
                 enabled = ctx.tabs_enabled.get(tab_key, True)
                 if not enabled:
                     app.nb.forget(i)
                     logger.info(f"[MAIN] removed tab idx={i} key={tab_key}")
-
             except Exception as ex:
                 logger.warning(f"[MAIN] tab remove failed idx={i} err={ex}")
 
@@ -56,6 +76,7 @@ def main():
     # ----------------------------------------
     # Run
     # ----------------------------------------
+    logger.info("[MAIN] app start")
     app.run()
 
 
