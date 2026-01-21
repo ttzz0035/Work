@@ -82,26 +82,42 @@ class ExcelDiffHtmlReport:
 """
 
     def _build_cell_diff(self) -> str:
-        rows = []
-        for d in self.data.get("diff_cells", []):
+        rows: List[str] = []
+
+        for idx, d in enumerate(self.data.get("diff_cells", []), start=1):
             r = d["mark"]["row"]
             c = d["mark"]["col"]
             t = d["type"]
             base = d["mark"]["base"]
+            va = html.escape(d.get("value_a", ""))
+            vb = html.escape(d.get("value_b", ""))
+
             rows.append(
                 f"<tr class='diff-{t.lower()}'>"
-                f"<td>R{r}C{c}</td>"
+                f"<td>{idx}</td>"
+                f"<td>{r}</td>"
+                f"<td>{c}</td>"
                 f"<td>{t}</td>"
+                f"<td>{va}</td>"
+                f"<td>{vb}</td>"
                 f"<td>{base}</td>"
                 f"</tr>"
             )
 
-        body = "\n".join(rows) if rows else "<tr><td colspan='3'>No diff</td></tr>"
+        body = "\n".join(rows) if rows else "<tr><td colspan='7'>No diff</td></tr>"
 
         return f"""
 <h2>Cell Differences</h2>
 <table class="diff">
-<tr><th>Cell</th><th>Type</th><th>Base</th></tr>
+<tr>
+  <th>No</th>
+  <th>Row</th>
+  <th>Col</th>
+  <th>Type</th>
+  <th>Value A</th>
+  <th>Value B</th>
+  <th>Base</th>
+</tr>
 {body}
 </table>
 """
@@ -111,14 +127,14 @@ class ExcelDiffHtmlReport:
         for d in self.data.get("diff_shapes", []):
             name = html.escape(d.get("name", ""))
             t = d.get("type", "")
-            a = d.get("a", {})
-            b = d.get("b", {})
+            a = html.escape(str(d.get("a", {})))
+            b = html.escape(str(d.get("b", {})))
             rows.append(f"""
 <tr class="diff-shape">
 <td>{name}</td>
 <td>{t}</td>
-<td>{html.escape(str(a))}</td>
-<td>{html.escape(str(b))}</td>
+<td>{a}</td>
+<td>{b}</td>
 </tr>
 """)
 
@@ -145,7 +161,7 @@ class ExcelDiffHtmlReport:
 <style>
 body { font-family: Consolas, monospace; font-size: 13px; }
 table { border-collapse: collapse; margin-bottom: 20px; }
-th, td { border: 1px solid #aaa; padding: 4px 8px; }
+th, td { border: 1px solid #aaa; padding: 4px 8px; vertical-align: top; }
 th { background: #eee; }
 
 .diff-mod { background: #fff3cd; }
@@ -187,7 +203,7 @@ if __name__ == "__main__":
     from tkinter import filedialog
 
     root = tk.Tk()
-    root.withdraw()  # 画面非表示
+    root.withdraw()
 
     logger.info("[UI] select diff json")
 
@@ -195,9 +211,7 @@ if __name__ == "__main__":
         title="Select diff JSON",
         filetypes=[("JSON files", "*.json")],
     )
-
     if not json_path:
-        logger.info("[UI] canceled (json)")
         raise SystemExit(0)
 
     logger.info("[UI] select output html")
@@ -207,9 +221,7 @@ if __name__ == "__main__":
         defaultextension=".html",
         filetypes=[("HTML files", "*.html")],
     )
-
     if not out_path:
-        logger.info("[UI] canceled (html)")
         raise SystemExit(0)
 
     generate_html_report(Path(json_path), Path(out_path))
