@@ -153,18 +153,6 @@ class ExcelDiffService:
     # -------------------------------------------------
     # sheet resolve (NO .names)
     # -------------------------------------------------
-    def _list_sheet_names(self, book: xw.Book) -> List[str]:
-        names: List[str] = []
-        try:
-            for sht in book.sheets:
-                try:
-                    names.append(str(sht.name))
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        return names
-
     def _resolve_sheet_pairs(self, book_diff: xw.Book, book_other: xw.Book, mode: str):
         pairs: List[Tuple[str, xw.Sheet, xw.Sheet]] = []
 
@@ -186,20 +174,22 @@ class ExcelDiffService:
             for sht in book_diff.sheets:
                 try:
                     diff_map[str(sht.name)] = sht
-                except Exception:
-                    pass
+                except Exception as e:
+                    self._log_err(f"[SHEET] diff sheet name read failed err={e}")
 
             for sht in book_other.sheets:
                 try:
                     other_map[str(sht.name)] = sht
-                except Exception:
-                    pass
+                except Exception as e:
+                    self._log_err(f"[SHEET] other sheet name read failed err={e}")
 
             common = sorted(set(diff_map.keys()) & set(other_map.keys()))
             only_diff = sorted(set(diff_map.keys()) - set(other_map.keys()))
             only_other = sorted(set(other_map.keys()) - set(diff_map.keys()))
 
-            self._log(f"[SHEET] mode=name common={len(common)} only_diff={len(only_diff)} only_other={len(only_other)}")
+            self._log(
+                f"[SHEET] mode=name common={len(common)} only_diff={len(only_diff)} only_other={len(only_other)}"
+            )
 
             for name in common:
                 pairs.append((name, diff_map[name], other_map[name]))
@@ -280,7 +270,7 @@ class ExcelDiffService:
         return out
 
     def _read_shapes(self, sht: xw.Sheet) -> Dict[str, Dict[str, Any]]:
-        out = {}
+        out: Dict[str, Dict[str, Any]] = {}
         for shp in sht.api.Shapes:
             try:
                 out[str(shp.Name)] = {
@@ -291,39 +281,56 @@ class ExcelDiffService:
                     "rotation": float(shp.Rotation),
                 }
             except Exception as e:
-                self._log(f"[SHAPE-READ-ERR] {e}")
+                self._log_err(f"[SHAPE-READ-ERR] sheet={getattr(sht, 'name', '')} err={e}")
         return out
 
     # -------------------------------------------------
-    # mark
+    # mark (CELL-ONLY)
     # -------------------------------------------------
     def _mark_cells_red_xlwings(self, sht: xw.Sheet, sheet: str) -> None:
+        marked = 0
         for d in self.diff_cells:
-            if d["sheet"] != sheet:
+            if d.get("sheet") != sheet:
                 continue
+
+            r = int(d["row"])
+            c = int(d["col"])
+
             try:
-                cell = sht.cells(d["row"], d["col"])
+                # ★ 必ず「1セル」だけを指定する（cells の解釈揺れを避ける）
+                cell = sht.range((r, c))
                 cell.api.Interior.Color = 0x6666FF
-                cell.api.Borders.Weight = 2
-            except Exception:
-                pass
+                try:
+                    cell.api.Borders.Weight = 2
+                except Exception:
+                    pass
+                marked += 1
+            except Exception as e:
+                self._log_err(f"[CELL-MARK-ERR] sheet={sheet} r={r} c={c} err={e}")
+
+        self._log(f"[MARK] sheet={sheet} cells={marked}")
 
     def _mark_shapes_red(self, book: xw.Book, sheet: str) -> None:
         try:
             sht = book.sheets[sheet]
         except Exception as e:
-            self._log(f"[SHAPE-MARK] sheet get failed sheet={sheet} err={e}")
+            self._log_err(f"[SHAPE-MARK] sheet get failed sheet={sheet} err={e}")
             return
 
         targets = {d["name"] for d in self.diff_shapes if d.get("sheet") == sheet}
+        marked = 0
+
         for shp in sht.api.Shapes:
             if str(shp.Name) in targets:
                 try:
                     shp.Line.Visible = True
                     shp.Line.ForeColor.RGB = 255
                     shp.Line.Weight = 2
-                except Exception:
-                    pass
+                    marked += 1
+                except Exception as e:
+                    self._log_err(f"[SHAPE-MARK-ERR] sheet={sheet} name={shp.Name} err={e}")
+
+        self._log(f"[MARK] sheet={sheet} shapes={marked}")
 
     # -------------------------------------------------
     # json
