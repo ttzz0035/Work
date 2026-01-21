@@ -159,29 +159,28 @@ class ExcelDiffService:
         if mode == "index":
             n = min(len(book_diff.sheets), len(book_other.sheets))
             for i in range(n):
-                pairs.append(
-                    (
-                        book_diff.sheets[i].name,
-                        book_diff.sheets[i],
-                        book_other.sheets[i],
-                    )
-                )
+                pairs.append((
+                    book_diff.sheets[i].name,
+                    book_diff.sheets[i],
+                    book_other.sheets[i],
+                ))
 
         elif mode == "name":
+            diff_names = set(book_diff.sheets.names)
             other_names = set(book_other.sheets.names)
-            for name in book_diff.sheets.names:
-                if name in other_names:
-                    pairs.append(
-                        (
-                            name,
-                            book_diff.sheets[name],
-                            book_other.sheets[name],
-                        )
-                    )
-                else:
-                    self.diff_shapes.append({"type": "SHEET_DEL", "sheet": name})
 
-            for name in other_names - set(book_diff.sheets.names):
+            for name in diff_names & other_names:
+                pairs.append((
+                    name,
+                    book_diff.sheets[name],
+                    book_other.sheets[name],
+                ))
+
+            # 差分だけ JSON に残す（Excel表示はしない）
+            for name in diff_names - other_names:
+                self.diff_shapes.append({"type": "SHEET_DEL", "sheet": name})
+
+            for name in other_names - diff_names:
                 self.diff_shapes.append({"type": "SHEET_ADD", "sheet": name})
 
         return pairs

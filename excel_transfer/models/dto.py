@@ -54,17 +54,14 @@ class DiffRequest:
     # 差分ベース
     base_file: str = "B"   # "A" or "B"
 
-    # 既存互換用（未使用でも残す）
-    key_cols: List[str] = field(default_factory=list)
-
     # 比較オプション
     compare_formula: bool = False
     include_context: bool = True
     compare_shapes: bool = False
 
-    # ★ 追加：シート比較モード
-    # "index" : インデックス一致（既定・後方互換）
-    # "name"  : シート名一致
+    # シート比較モード
+    # "index": インデックス一致（既定）
+    # "name" : シート名一致
     sheet_mode: str = "index"
 
     # 将来拡張用（明示シート指定）
