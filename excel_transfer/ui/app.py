@@ -396,7 +396,6 @@ class DiffTab(BaseTab):
             range_a=self.range_a.get().strip(),
             range_b=self.range_b.get().strip(),
             base_file=self.diff_base.get().strip(),
-            key_cols=[],
             compare_formula=self.var_formula.get(),
             include_context=self.var_ctx.get(),
             compare_shapes=self.var_shapes.get(),

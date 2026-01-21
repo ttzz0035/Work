@@ -4,7 +4,7 @@ import json
 import os
 import shutil
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 import xlwings as xw
 
@@ -151,36 +151,63 @@ class ExcelDiffService:
         return diff_path
 
     # -------------------------------------------------
-    # sheet resolve
+    # sheet resolve (NO .names)
     # -------------------------------------------------
+    def _list_sheet_names(self, book: xw.Book) -> List[str]:
+        names: List[str] = []
+        try:
+            for sht in book.sheets:
+                try:
+                    names.append(str(sht.name))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return names
+
     def _resolve_sheet_pairs(self, book_diff: xw.Book, book_other: xw.Book, mode: str):
-        pairs = []
+        pairs: List[Tuple[str, xw.Sheet, xw.Sheet]] = []
 
         if mode == "index":
             n = min(len(book_diff.sheets), len(book_other.sheets))
             for i in range(n):
-                pairs.append((
-                    book_diff.sheets[i].name,
-                    book_diff.sheets[i],
-                    book_other.sheets[i],
-                ))
+                pairs.append(
+                    (
+                        str(book_diff.sheets[i].name),
+                        book_diff.sheets[i],
+                        book_other.sheets[i],
+                    )
+                )
 
         elif mode == "name":
-            diff_names = set(book_diff.sheets.names)
-            other_names = set(book_other.sheets.names)
+            diff_map: Dict[str, xw.Sheet] = {}
+            other_map: Dict[str, xw.Sheet] = {}
 
-            for name in diff_names & other_names:
-                pairs.append((
-                    name,
-                    book_diff.sheets[name],
-                    book_other.sheets[name],
-                ))
+            for sht in book_diff.sheets:
+                try:
+                    diff_map[str(sht.name)] = sht
+                except Exception:
+                    pass
 
-            # 差分だけ JSON に残す（Excel表示はしない）
-            for name in diff_names - other_names:
+            for sht in book_other.sheets:
+                try:
+                    other_map[str(sht.name)] = sht
+                except Exception:
+                    pass
+
+            common = sorted(set(diff_map.keys()) & set(other_map.keys()))
+            only_diff = sorted(set(diff_map.keys()) - set(other_map.keys()))
+            only_other = sorted(set(other_map.keys()) - set(diff_map.keys()))
+
+            self._log(f"[SHEET] mode=name common={len(common)} only_diff={len(only_diff)} only_other={len(only_other)}")
+
+            for name in common:
+                pairs.append((name, diff_map[name], other_map[name]))
+
+            for name in only_diff:
                 self.diff_shapes.append({"type": "SHEET_DEL", "sheet": name})
 
-            for name in other_names - diff_names:
+            for name in only_other:
                 self.diff_shapes.append({"type": "SHEET_ADD", "sheet": name})
 
         return pairs
@@ -255,13 +282,16 @@ class ExcelDiffService:
     def _read_shapes(self, sht: xw.Sheet) -> Dict[str, Dict[str, Any]]:
         out = {}
         for shp in sht.api.Shapes:
-            out[str(shp.Name)] = {
-                "top": float(shp.Top),
-                "left": float(shp.Left),
-                "width": float(shp.Width),
-                "height": float(shp.Height),
-                "rotation": float(shp.Rotation),
-            }
+            try:
+                out[str(shp.Name)] = {
+                    "top": float(shp.Top),
+                    "left": float(shp.Left),
+                    "width": float(shp.Width),
+                    "height": float(shp.Height),
+                    "rotation": float(shp.Rotation),
+                }
+            except Exception as e:
+                self._log(f"[SHAPE-READ-ERR] {e}")
         return out
 
     # -------------------------------------------------
@@ -279,7 +309,12 @@ class ExcelDiffService:
                 pass
 
     def _mark_shapes_red(self, book: xw.Book, sheet: str) -> None:
-        sht = book.sheets[sheet]
+        try:
+            sht = book.sheets[sheet]
+        except Exception as e:
+            self._log(f"[SHAPE-MARK] sheet get failed sheet={sheet} err={e}")
+            return
+
         targets = {d["name"] for d in self.diff_shapes if d.get("sheet") == sheet}
         for shp in sht.api.Shapes:
             if str(shp.Name) in targets:
@@ -302,6 +337,8 @@ class ExcelDiffService:
         }
         with open(path, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
+
+        self._log(f"[OK] JSON出力: {path}")
 
 
 def run_diff(req: DiffRequest, ctx, logger, append_log: LogFn) -> str:
