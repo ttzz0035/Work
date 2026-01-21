@@ -262,6 +262,7 @@ class DiffTab(BaseTab):
     def build(self):
         self.tab.grid_columnconfigure(0, weight=1)
 
+        # --- files ---
         files = ttk.LabelFrame(self.tab, text="ファイル")
         files.grid(row=0, column=0, sticky="we", padx=4, pady=4)
         files.grid_columnconfigure(1, weight=1)
@@ -272,31 +273,27 @@ class DiffTab(BaseTab):
         self.file_a.insert(0, self.ctx.user_paths.get("diff_file_a", ""))
 
         ttk.Button(
-            files,
-            text="...",
-            width=3,
+            files, text="...", width=3,
             command=lambda: self.app.choose_file(self.file_a, "diff_file_a"),
         ).grid(row=0, column=2, padx=(0, 4))
 
-        ttk.Label(files, text=self.ctx.labels["label_diff_file_b"]).grid(
-            row=1, column=0, sticky="w", pady=(4, 0)
-        )
+        ttk.Label(files, text=self.ctx.labels["label_diff_file_b"]).grid(row=1, column=0, sticky="w", pady=(4, 0))
         self.file_b = tk.Entry(files, width=70)
         self.file_b.grid(row=1, column=1, sticky="we", padx=4, pady=(4, 0))
         self.file_b.insert(0, self.ctx.user_paths.get("diff_file_b", ""))
 
         ttk.Button(
-            files,
-            text="...",
-            width=3,
+            files, text="...", width=3,
             command=lambda: self.app.choose_file(self.file_b, "diff_file_b"),
         ).grid(row=1, column=2, padx=(0, 4), pady=(4, 0))
 
+        # --- middle ---
         mid = ttk.Frame(self.tab)
         mid.grid(row=1, column=0, sticky="we", padx=4, pady=4)
         mid.grid_columnconfigure(0, weight=1)
         mid.grid_columnconfigure(1, weight=1)
 
+        # --- range ---
         rng = ttk.LabelFrame(mid, text="比較範囲（必須）")
         rng.grid(row=0, column=0, sticky="we", padx=(0, 4))
         rng.grid_columnconfigure(1, weight=1)
@@ -311,43 +308,58 @@ class DiffTab(BaseTab):
         self.range_b.grid(row=1, column=1, sticky="w", padx=4, pady=(4, 0))
         self.range_b.insert(0, self.ctx.user_paths.get("diff_range_b", ""))
 
+        # --- base ---
         base = ttk.LabelFrame(mid, text="差分ベース（どちらをDIFFにするか）")
         base.grid(row=0, column=1, sticky="we", padx=(4, 0))
-        self.diff_base = tk.StringVar(
-            value=self.ctx.user_paths.get("diff_base_file", "B")
-        )
+        self.diff_base = tk.StringVar(value=self.ctx.user_paths.get("diff_base_file", "B"))
+
         ttk.Radiobutton(
-            base,
-            text="比較先（B）をベース（既定）",
-            variable=self.diff_base,
-            value="B",
+            base, text="比較先（B）をベース（既定）",
+            variable=self.diff_base, value="B"
         ).pack(anchor="w", padx=6, pady=(2, 0))
+
         ttk.Radiobutton(
-            base,
-            text="比較元（A）をベース",
-            variable=self.diff_base,
-            value="A",
+            base, text="比較元（A）をベース",
+            variable=self.diff_base, value="A"
         ).pack(anchor="w", padx=6, pady=(2, 6))
 
+        # --- options ---
         opt = ttk.LabelFrame(self.tab, text="オプション")
         opt.grid(row=2, column=0, sticky="we", padx=4, pady=4)
 
-        self.var_formula = tk.BooleanVar(
-            value=bool(self.ctx.user_paths.get("diff_compare_formula", False))
-        )
-        self.var_ctx = tk.BooleanVar(
-            value=bool(self.ctx.user_paths.get("diff_include_context", True))
-        )
-        self.var_shapes = tk.BooleanVar(
-            value=bool(self.ctx.user_paths.get("diff_compare_shapes", False))
-        )
+        self.var_formula = tk.BooleanVar(value=bool(self.ctx.user_paths.get("diff_compare_formula", False)))
+        self.var_ctx = tk.BooleanVar(value=bool(self.ctx.user_paths.get("diff_include_context", True)))
+        self.var_shapes = tk.BooleanVar(value=bool(self.ctx.user_paths.get("diff_compare_shapes", False)))
 
         ttk.Checkbutton(opt, text="数式比較", variable=self.var_formula).pack(side="left", padx=6, pady=6)
         ttk.Checkbutton(opt, text="ジャンプリンク/コンテキスト", variable=self.var_ctx).pack(side="left", padx=6, pady=6)
         ttk.Checkbutton(opt, text="図形/画像も比較", variable=self.var_shapes).pack(side="left", padx=6, pady=6)
 
+        # --- sheet mode ---
+        sheet = ttk.LabelFrame(self.tab, text="シート比較モード")
+        sheet.grid(row=3, column=0, sticky="we", padx=4, pady=4)
+
+        self.sheet_mode = tk.StringVar(
+            value=self.ctx.user_paths.get("diff_sheet_mode", "index")
+        )
+
+        ttk.Radiobutton(
+            sheet,
+            text="インデックス一致（Sheet1 ↔ Sheet1）【既定】",
+            variable=self.sheet_mode,
+            value="index",
+        ).pack(anchor="w", padx=6, pady=(2, 0))
+
+        ttk.Radiobutton(
+            sheet,
+            text="シート名一致（同名シートのみ）",
+            variable=self.sheet_mode,
+            value="name",
+        ).pack(anchor="w", padx=6, pady=(2, 6))
+
+        # --- buttons ---
         btns = ttk.Frame(self.tab)
-        btns.grid(row=3, column=0, sticky="we", padx=4, pady=(4, 0))
+        btns.grid(row=4, column=0, sticky="we", padx=4, pady=(4, 0))
         btns.grid_columnconfigure(0, weight=1)
 
         self.report_btn = ttk.Button(btns, text="HTMLレポート", command=self.make_report)
@@ -357,7 +369,17 @@ class DiffTab(BaseTab):
             row=0, column=1, sticky="e", padx=6, pady=6
         )
 
+    # -------------------------------------------------
+    # run
+    # -------------------------------------------------
+    def run(self):
+        try:
+            self._run_impl()
+        except Exception as e:
+            self.log(f"[ERR] Diff: {e}")
+
     def _run_impl(self):
+        # 保存
         self.ctx.save_user_path("diff_file_a", self.file_a.get())
         self.ctx.save_user_path("diff_file_b", self.file_b.get())
         self.ctx.save_user_path("diff_range_a", self.range_a.get())
@@ -366,6 +388,7 @@ class DiffTab(BaseTab):
         self.ctx.save_user_path("diff_compare_formula", bool(self.var_formula.get()))
         self.ctx.save_user_path("diff_include_context", bool(self.var_ctx.get()))
         self.ctx.save_user_path("diff_compare_shapes", bool(self.var_shapes.get()))
+        self.ctx.save_user_path("diff_sheet_mode", self.sheet_mode.get())
 
         req = DiffRequest(
             file_a=self.file_a.get().strip(),
@@ -377,11 +400,15 @@ class DiffTab(BaseTab):
             compare_formula=self.var_formula.get(),
             include_context=self.var_ctx.get(),
             compare_shapes=self.var_shapes.get(),
+            sheet_mode=self.sheet_mode.get(),
         )
 
         out = run_diff(req, self.ctx, self.logger, self.log)
         self.log(f"[OK] 差分レポート: {out}")
 
+    # -------------------------------------------------
+    # report
+    # -------------------------------------------------
     def make_report(self):
         self.log("[UI] select diff json")
 
@@ -407,7 +434,6 @@ class DiffTab(BaseTab):
         generate_html_report(Path(json_path), Path(out_path))
         self.log(f"[OK] HTMLレポート: {out_path}")
         messagebox.showinfo("レポート", f"HTMLレポートを出力しました。\n{out_path}")
-
 
 # =========================================================
 # Count Tab
