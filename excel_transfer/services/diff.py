@@ -208,33 +208,47 @@ class ExcelDiffService:
     def _diff_cells_core(self, sht_base: xw.Sheet, sht_other: xw.Sheet, sheet: str) -> None:
         base = self._meta["base_file"]
 
-        data_base = self._read_range(
-            sht_base,
-            self.req.range_b if base == "B" else self.req.range_a,
-        )
-        data_other = self._read_range(
-            sht_other,
-            self.req.range_a if base == "B" else self.req.range_b,
-        )
+        rng_base = self.req.range_b if base == "B" else self.req.range_a
+        rng_other = self.req.range_a if base == "B" else self.req.range_b
 
-        for r in sorted(set(data_base) | set(data_other)):
-            row_a = data_base.get(r, {})
-            row_b = data_other.get(r, {})
-            for c in sorted(set(row_a) | set(row_b)):
-                va = row_a.get(c)
-                vb = row_b.get(c)
+        self._log(f"[INFO] diff start sheet={sheet} base={base} range_base={rng_base} range_other={rng_other}")
+
+        area_base = sht_base.range(rng_base)
+        area_other = sht_other.range(rng_other)
+
+        rows = area_base.rows.count
+        cols = area_base.columns.count
+
+        self._log(f"[INFO] read cells rows={rows} cols={cols}")
+
+        vals_base = area_base.options(ndim=2, empty=None).value
+        vals_other = area_other.options(ndim=2, empty=None).value
+
+        sr = area_base.row
+        sc = area_base.column
+
+        hit = 0
+
+        for r_off in range(rows):
+            for c_off in range(cols):
+                va = vals_base[r_off][c_off]
+                vb = vals_other[r_off][c_off]
+
                 if va != vb:
+                    hit += 1
                     self.diff_cells.append(
                         {
                             "type": "MOD",
                             "sheet": sheet,
-                            "row": r,
-                            "col": c,
+                            "row": sr + r_off,
+                            "col": sc + c_off,
                             "base": base,
                             "value_a": "" if va is None else str(va),
                             "value_b": "" if vb is None else str(vb),
                         }
                     )
+
+        self._log(f"[INFO] diff end sheet={sheet} diff_cells={hit}")
 
     # -------------------------------------------------
     # shape diff
