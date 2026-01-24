@@ -4,8 +4,10 @@
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
-
+import json
+from ui.dialogs.progress_dialog import ProgressDialog
 from ui.dialogs.transfer_csv_builder import TransferCsvBuilderDialog
+from ui.dialogs.preview_dialog import PreviewReplaceDialog
 from ui.components.excel_canvas import ExcelCanvas
 from models.dto import GrepRequest, DiffRequest, TransferRequest, CountRequest
 from services.transfer import run_transfer_from_csvs
@@ -14,6 +16,7 @@ from services.diff import run_diff
 from services.count import run_count
 from services.excel_view_service import ExcelViewService
 from outputs.excel_diff_html import generate_html_report
+from outputs.excel_grep_html import generate_grep_html_report
 
 
 class BaseTab:
@@ -42,6 +45,8 @@ class BaseTab:
                 self.logger.error(f"[LICENSE][BLOCK] {e}", exc_info=True)
             return
 
+        self.app.show_progress(f"{name} 実行中...")
+
         try:
             self._run_impl()
             self.log(f"[RUN] {name} done")
@@ -49,6 +54,8 @@ class BaseTab:
             self.log(f"[ERR] {name}: {e}")
             if self.logger:
                 self.logger.error(f"[RUN][ERR] {name}: {e}", exc_info=True)
+        finally:
+            self.app.hide_progress()
 
     # =========================================================
     # 実行時ライセンス再評価（唯一の追加責務）
@@ -193,22 +200,25 @@ class GrepTab(BaseTab):
         self.build()
 
     def build(self):
+        self.tab.grid_columnconfigure(0, weight=1)
+
+        # --- main ---
         frm = ttk.LabelFrame(self.tab, text="Grep")
         frm.grid(row=0, column=0, sticky="we", padx=4, pady=4)
         frm.grid_columnconfigure(1, weight=1)
 
+        # --- Root ---
         ttk.Label(frm, text=self.ctx.labels["label_grep_root"]).grid(row=0, column=0, sticky="w")
         self.root_entry = tk.Entry(frm, width=70)
         self.root_entry.grid(row=0, column=1, sticky="we", padx=4)
         self.root_entry.insert(0, self.ctx.user_paths.get("grep_root", ""))
 
         ttk.Button(
-            frm,
-            text="...",
-            width=3,
+            frm, text="...", width=3,
             command=lambda: self.app.choose_dir(self.root_entry, "grep_root"),
         ).grid(row=0, column=2, padx=(0, 4))
 
+        # --- Keyword ---
         ttk.Label(frm, text=self.ctx.labels["label_grep_keyword"]).grid(
             row=1, column=0, sticky="w", pady=(4, 0)
         )
@@ -216,40 +226,197 @@ class GrepTab(BaseTab):
         self.kw_entry.grid(row=1, column=1, sticky="w", padx=4, pady=(4, 0))
         self.kw_entry.insert(0, self.ctx.user_paths.get("grep_keyword", ""))
 
-        self.var_ic = tk.BooleanVar(
-            value=bool(self.ctx.user_paths.get("grep_ignore_case", True))
-        )
-        self.var_rx = tk.BooleanVar(
-            value=bool(self.ctx.user_paths.get("grep_use_regex", False))
-        )
+        # --- Options ---
+        self.var_ic = tk.BooleanVar(value=bool(self.ctx.user_paths.get("grep_ignore_case", True)))
+        self.var_rx = tk.BooleanVar(value=bool(self.ctx.user_paths.get("grep_use_regex", False)))
 
         opt = ttk.Frame(frm)
         opt.grid(row=2, column=1, sticky="w", padx=4, pady=(4, 0))
         ttk.Checkbutton(opt, text=self.ctx.labels["check_ignore_case"], variable=self.var_ic).pack(side="left")
         ttk.Checkbutton(opt, text="正規表現", variable=self.var_rx).pack(side="left", padx=(8, 0))
 
-        ttk.Button(self.tab, text="実行", command=self.run).grid(
-            row=1, column=1, sticky="ne", padx=6, pady=6
+        # --- File name regex ---
+        ttk.Label(frm, text="ファイル名（正規表現）").grid(row=3, column=0, sticky="w", pady=(8, 0))
+        self.file_rx_entry = tk.Entry(frm, width=40)
+        self.file_rx_entry.grid(row=3, column=1, sticky="w", padx=4, pady=(8, 0))
+        self.file_rx_entry.insert(0, self.ctx.user_paths.get("grep_file_regex", ""))
+
+        # --- Sheet regex ---
+        ttk.Label(frm, text="シート（正規表現）※名前 or 番号").grid(
+            row=4, column=0, sticky="w", pady=(8, 0)
+        )
+        self.sheet_rx_entry = tk.Entry(frm, width=30)
+        self.sheet_rx_entry.grid(row=4, column=1, sticky="w", padx=4, pady=(8, 0))
+        self.sheet_rx_entry.insert(0, self.ctx.user_paths.get("grep_sheet_regex", ""))
+
+        # --- Offset ---
+        ttk.Label(frm, text="検索ヒットからのオフセット").grid(row=5, column=0, sticky="w", pady=(8, 0))
+        off = ttk.Frame(frm)
+        off.grid(row=5, column=1, sticky="w", padx=4, pady=(8, 0))
+
+        ttk.Label(off, text="行").pack(side="left")
+        self.offset_row = tk.Entry(off, width=6)
+        self.offset_row.pack(side="left", padx=(4, 12))
+        self.offset_row.insert(0, self.ctx.user_paths.get("grep_offset_row", "0"))
+
+        ttk.Label(off, text="列").pack(side="left")
+        self.offset_col = tk.Entry(off, width=6)
+        self.offset_col.pack(side="left")
+        self.offset_col.insert(0, self.ctx.user_paths.get("grep_offset_col", "0"))
+
+        # =================================================
+        # Replace section
+        # =================================================
+        self.var_replace_enabled = tk.BooleanVar(
+            value=bool(self.ctx.user_paths.get("grep_replace_enabled", False))
         )
 
-        self.tab.grid_columnconfigure(0, weight=1)
+        ttk.Checkbutton(
+            frm,
+            text="置換を行う",
+            variable=self.var_replace_enabled,
+            command=self._update_replace_state,
+        ).grid(row=6, column=0, sticky="w", pady=(10, 0))
+
+        self.replace_entry = tk.Entry(frm, width=40)
+        self.replace_entry.grid(row=6, column=1, sticky="w", padx=4, pady=(10, 0))
+        self.replace_entry.insert(0, self.ctx.user_paths.get("grep_replace", ""))
+
+        ttk.Label(frm, text="置換モード").grid(row=7, column=0, sticky="w", pady=(8, 0))
+        self.var_mode = tk.StringVar(value=self.ctx.user_paths.get("grep_replace_mode", "preview"))
+
+        mode = ttk.Frame(frm)
+        mode.grid(row=7, column=1, sticky="w", padx=4, pady=(8, 0))
+        self.rb_preview = ttk.Radiobutton(mode, text="プレビュー", value="preview", variable=self.var_mode)
+        self.rb_auto = ttk.Radiobutton(mode, text="自動置換", value="auto", variable=self.var_mode)
+        self.rb_preview.pack(side="left")
+        self.rb_auto.pack(side="left", padx=(12, 0))
+
+        # --- buttons（DiffTab と同配置） ---
+        btns = ttk.Frame(self.tab)
+        btns.grid(row=1, column=0, sticky="we", padx=4, pady=(4, 0))
+        btns.grid_columnconfigure(0, weight=1)
+
+        ttk.Button(btns, text="HTMLレポート", command=self.make_report).grid(
+            row=0, column=0, sticky="w", padx=6, pady=6
+        )
+
+        ttk.Button(btns, text="実行", command=self.run).grid(
+            row=0, column=1, sticky="e", padx=6, pady=6
+        )
+
+        self._update_replace_state()
+
+    # -------------------------------------------------
+    # Replace state
+    # -------------------------------------------------
+    def _update_replace_state(self):
+        enabled = self.var_replace_enabled.get()
+        state = "normal" if enabled else "disabled"
+        self.replace_entry.configure(state=state)
+        self.rb_preview.configure(state=state)
+        self.rb_auto.configure(state=state)
+        self.logger.info(f"[GREP][UI] replace_enabled={enabled}")
+
+    # -------------------------------------------------
+    # run
+    # -------------------------------------------------
+    def run(self):
+        try:
+            self._run_impl()
+        except Exception as e:
+            self.log(f"[ERR] Grep: {e}")
 
     def _run_impl(self):
+        # save
         self.ctx.save_user_path("grep_root", self.root_entry.get())
         self.ctx.save_user_path("grep_keyword", self.kw_entry.get())
         self.ctx.save_user_path("grep_ignore_case", bool(self.var_ic.get()))
         self.ctx.save_user_path("grep_use_regex", bool(self.var_rx.get()))
+        self.ctx.save_user_path("grep_file_regex", self.file_rx_entry.get())
+        self.ctx.save_user_path("grep_sheet_regex", self.sheet_rx_entry.get())
+        self.ctx.save_user_path("grep_offset_row", self.offset_row.get())
+        self.ctx.save_user_path("grep_offset_col", self.offset_col.get())
+        self.ctx.save_user_path("grep_replace_enabled", self.var_replace_enabled.get())
+        self.ctx.save_user_path("grep_replace", self.replace_entry.get())
+        self.ctx.save_user_path("grep_replace_mode", self.var_mode.get())
 
         req = GrepRequest(
             root_dir=self.root_entry.get().strip(),
             keyword=self.kw_entry.get().strip(),
             ignore_case=self.var_ic.get(),
             use_regex=self.var_rx.get(),
+            file_name_regex=self.file_rx_entry.get().strip() or None,
+            sheet_name_regex=self.sheet_rx_entry.get().strip() or None,
+            offset_row=int(self.offset_row.get()),
+            offset_col=int(self.offset_col.get()),
+            replace_enabled=self.var_replace_enabled.get(),
+            replace_pattern=self.replace_entry.get(),
+            replace_mode=self.var_mode.get(),
         )
 
+        # 1st run (preview build / search)
         out, cnt = run_grep(req, self.ctx, self.logger, self.log)
+
+        # --- preview ---
+        if self.var_replace_enabled.get() and req.replace_mode == "preview":
+            import json
+
+            with open(out, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            items = []
+            for fentry in data.get("files", []):
+                for sentry in fentry.get("sheets", []):
+                    items.extend(sentry.get("items", []))
+
+            if not items:
+                self.log("[GREP] preview: no replace items")
+                self.log(f"[OK] Grep結果: {out} / {cnt}件")
+                return
+
+            dlg = PreviewReplaceDialog(
+                self.app.root,
+                items,
+                req.replace_pattern,
+            )
+
+            if dlg.result is None:
+                self.log("[GREP] preview canceled")
+                self.log(f"[OK] Grep結果: {out} / {cnt}件")
+                return
+
+            self.log(f"[GREP] preview accepted items={len(dlg.result)}")
+
+            # ★ 再実行用フラグ
+            req.preview_accepted = True
+
+            # ★ 2nd run (apply replace)
+            run_grep(req, self.ctx, self.logger, self.log)
+
         self.log(f"[OK] Grep結果: {out} / {cnt}件")
 
+    # -------------------------------------------------
+    # report（HTMLはボタンのみ）
+    # -------------------------------------------------
+    def make_report(self):
+        json_path = filedialog.askopenfilename(
+            title="Select grep JSON",
+            filetypes=[("JSON files", "*.json")],
+        )
+        if not json_path:
+            return
+
+        out_path = filedialog.asksaveasfilename(
+            title="Save HTML report",
+            defaultextension=".html",
+            filetypes=[("HTML files", "*.html")],
+        )
+        if not out_path:
+            return
+
+        generate_grep_html_report(Path(json_path), Path(out_path))
+        messagebox.showinfo("レポート", f"HTMLレポートを出力しました。\n{out_path}")
 
 # =========================================================
 # Diff Tab
@@ -641,6 +808,7 @@ from tkinter import ttk, filedialog
 class ExcelApp:
     def __init__(self, ctx, logger):
         self.ctx, self.logger = ctx, logger
+        self._progress = None
 
         self.root = tk.Tk()
         self.root.title(ctx.labels["app_title"])
@@ -792,3 +960,18 @@ class ExcelApp:
 
     def run(self):
         self.root.mainloop()
+
+    # -----------------------------------------
+    # Progress control（追加）
+    # -----------------------------------------
+    def show_progress(self, message: str):
+        if self._progress:
+            return
+        self.nb.state(["disabled"])
+        self._progress = ProgressDialog(self.root, message)
+
+    def hide_progress(self):
+        if self._progress:
+            self._progress.close()
+            self._progress = None
+        self.nb.state(["!disabled"])

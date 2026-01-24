@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, List
+from typing import Callable, List, Optional
 
 
 LogFn = Callable[[str], None]
@@ -22,11 +22,34 @@ class TransferRequest:
 # -------------------------------------------------
 @dataclass
 class GrepRequest:
+    # --- existing (DO NOT CHANGE SEMANTICS) ---
     root_dir: str = ""
     keyword: str = ""
     ignore_case: bool = True
     use_regex: bool = False
 
+    # --- file selector (by filename regex) ---
+    file_name_regex: Optional[str] = None  # applied to basename
+
+    # --- sheet selector (search scope) ---
+    sheet_name_regex: Optional[str] = None
+    sheet_indices: Optional[List[int]] = None  # 1-based indices
+
+    # --- search offset (hit -> target) ---
+    offset_row: int = 0
+    offset_col: int = 0
+
+    # --- replace enable flag ---
+    # True: replace is enabled ("" means empty-string replace)
+    # False: search-only (do not replace)
+    replace_enabled: bool = False
+
+    # --- replace ---
+    replace_pattern: str = ""
+
+    # --- execution mode ---
+    # "preview" | "auto"
+    replace_mode: str = "preview"
 
 # -------------------------------------------------
 # Count

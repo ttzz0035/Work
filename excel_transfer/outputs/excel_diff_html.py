@@ -4,7 +4,6 @@ import json
 import html
 from pathlib import Path
 from typing import Dict, Any, List
-
 import logging
 
 
@@ -81,6 +80,9 @@ class ExcelDiffHtmlReport:
 </ul>
 """
 
+    # -----------------------------------------------------
+    # Cell Diff
+    # -----------------------------------------------------
     def _build_cell_diff(self) -> str:
         rows: List[str] = []
 
@@ -129,28 +131,56 @@ class ExcelDiffHtmlReport:
 </table>
 """
 
+    # -----------------------------------------------------
+    # Shape Diff（ADD / DEL / GEOM / TEXT 対応）
+    # -----------------------------------------------------
     def _build_shape_diff(self) -> str:
-        rows = []
-        for d in self.data.get("diff_shapes", []):
-            name = html.escape(d.get("name", ""))
-            t = d.get("type", "")
-            a = html.escape(str(d.get("a", {})))
-            b = html.escape(str(d.get("b", {})))
-            rows.append(f"""
-<tr class="diff-shape">
-<td>{name}</td>
-<td>{t}</td>
-<td>{a}</td>
-<td>{b}</td>
-</tr>
-""")
+        rows: List[str] = []
 
-        body = "\n".join(rows) if rows else "<tr><td colspan='4'>No shape diff</td></tr>"
+        for idx, d in enumerate(self.data.get("diff_shapes", []), start=1):
+            t = d.get("type", "")
+            sheet = html.escape(str(d.get("sheet", "")))
+            name = html.escape(str(d.get("name", "")))
+
+            detail_a = ""
+            detail_b = ""
+
+            if t == "SHAPE_GEOM":
+                detail_a = html.escape(json.dumps(d.get("a", {}), ensure_ascii=False))
+                detail_b = html.escape(json.dumps(d.get("b", {}), ensure_ascii=False))
+
+            elif t == "SHAPE_TEXT":
+                detail_a = html.escape(d.get("text_a", ""))
+                detail_b = html.escape(d.get("text_b", ""))
+
+            elif t in ("SHAPE_ADD", "SHAPE_DEL"):
+                detail_a = "-"
+                detail_b = "-"
+
+            rows.append(
+                f"<tr class='diff-shape diff-{t.lower()}'>"
+                f"<td>{idx}</td>"
+                f"<td>{sheet}</td>"
+                f"<td>{name}</td>"
+                f"<td>{t}</td>"
+                f"<td>{detail_a}</td>"
+                f"<td>{detail_b}</td>"
+                f"</tr>"
+            )
+
+        body = "\n".join(rows) if rows else "<tr><td colspan='6'>No shape diff</td></tr>"
 
         return f"""
 <h2>Shape Differences</h2>
 <table class="diff">
-<tr><th>Name</th><th>Type</th><th>A</th><th>B</th></tr>
+<tr>
+  <th>No</th>
+  <th>Sheet</th>
+  <th>Name</th>
+  <th>Type</th>
+  <th>Detail A</th>
+  <th>Detail B</th>
+</tr>
 {body}
 </table>
 """
@@ -167,14 +197,17 @@ class ExcelDiffHtmlReport:
 <title>Excel Diff Report</title>
 <style>
 body { font-family: Consolas, monospace; font-size: 13px; }
-table { border-collapse: collapse; margin-bottom: 20px; }
+table { border-collapse: collapse; margin-bottom: 20px; width: 100%; }
 th, td { border: 1px solid #aaa; padding: 4px 8px; vertical-align: top; }
 th { background: #eee; }
 
 .diff-mod { background: #fff3cd; }
 .diff-add { background: #d4edda; }
 .diff-del { background: #f8d7da; }
+
 .diff-shape { background: #e2d6f3; }
+.diff-shape.diff-shape_geom { background: #f6d6d6; }
+.diff-shape.diff-shape_text { background: #fff0b3; }
 
 .meta th { text-align: left; width: 160px; }
 </style>
@@ -203,32 +236,3 @@ def generate_html_report(json_path: Path, out_path: Path) -> None:
 
     logger.info(f"[WRITE] {out_path}")
     out_path.write_text(html_text, encoding="utf-8")
-
-
-if __name__ == "__main__":
-    import tkinter as tk
-    from tkinter import filedialog
-
-    root = tk.Tk()
-    root.withdraw()
-
-    logger.info("[UI] select diff json")
-
-    json_path = filedialog.askopenfilename(
-        title="Select diff JSON",
-        filetypes=[("JSON files", "*.json")],
-    )
-    if not json_path:
-        raise SystemExit(0)
-
-    logger.info("[UI] select output html")
-
-    out_path = filedialog.asksaveasfilename(
-        title="Save HTML report",
-        defaultextension=".html",
-        filetypes=[("HTML files", "*.html")],
-    )
-    if not out_path:
-        raise SystemExit(0)
-
-    generate_html_report(Path(json_path), Path(out_path))

@@ -251,21 +251,6 @@ class ExcelDiffService:
         self._log(f"[INFO] diff end sheet={sheet} diff_cells={hit}")
 
     # -------------------------------------------------
-    # shape diff
-    # -------------------------------------------------
-    def _diff_shapes_core(self, sht_base: xw.Sheet, sht_other: xw.Sheet, sheet: str) -> None:
-        shapes_base = self._read_shapes(sht_base)
-        shapes_other = self._read_shapes(sht_other)
-
-        for name in sorted(set(shapes_base) | set(shapes_other)):
-            a = shapes_base.get(name)
-            b = shapes_other.get(name)
-            if a != b:
-                self.diff_shapes.append(
-                    {"type": "SHAPE_MOD", "sheet": sheet, "name": name, "a": a, "b": b}
-                )
-
-    # -------------------------------------------------
     # helpers
     # -------------------------------------------------
     def _read_range(self, sht: xw.Sheet, rng: str) -> Dict[int, Dict[int, Any]]:
@@ -283,20 +268,136 @@ class ExcelDiffService:
             out[sr + ro] = {sc + c: v for c, v in enumerate(row)}
         return out
 
+    # ===============================
+    # shape read（外形＋テキスト）
+    # ===============================
     def _read_shapes(self, sht: xw.Sheet) -> Dict[str, Dict[str, Any]]:
         out: Dict[str, Dict[str, Any]] = {}
         for shp in sht.api.Shapes:
             try:
+                text = ""
+                try:
+                    text = shp.TextFrame.Characters().Text
+                except Exception:
+                    text = ""
+
                 out[str(shp.Name)] = {
                     "top": float(shp.Top),
                     "left": float(shp.Left),
                     "width": float(shp.Width),
                     "height": float(shp.Height),
                     "rotation": float(shp.Rotation),
+                    "line_color": int(shp.Line.ForeColor.RGB) if shp.Line.Visible else None,
+                    "fill_color": int(shp.Fill.ForeColor.RGB) if shp.Fill.Visible else None,
+                    "text": text or "",
                 }
             except Exception as e:
-                self._log_err(f"[SHAPE-READ-ERR] sheet={getattr(sht, 'name', '')} err={e}")
+                self._log_err(f"[SHAPE-READ-ERR] sheet={sht.name} err={e}")
         return out
+
+
+    # ===============================
+    # shape diff（外形 / テキスト分離）
+    # ===============================
+    def _diff_shapes_core(self, sht_base: xw.Sheet, sht_other: xw.Sheet, sheet: str) -> None:
+        base_shapes = self._read_shapes(sht_base)
+        other_shapes = self._read_shapes(sht_other)
+
+        names_base = set(base_shapes.keys())
+        names_other = set(other_shapes.keys())
+
+        self._log(
+            f"[INFO] shape diff start sheet={sheet} "
+            f"base={len(names_base)} other={len(names_other)}"
+        )
+
+        # ADD / DEL
+        for name in sorted(names_base - names_other):
+            self.diff_shapes.append(
+                {"type": "SHAPE_DEL", "sheet": sheet, "name": name}
+            )
+
+        for name in sorted(names_other - names_base):
+            self.diff_shapes.append(
+                {"type": "SHAPE_ADD", "sheet": sheet, "name": name}
+            )
+
+        # 共通図形
+        for name in sorted(names_base & names_other):
+            a = base_shapes[name]
+            b = other_shapes[name]
+
+            # --- 外形比較 ---
+            geom_keys = ["top", "left", "width", "height", "rotation", "line_color", "fill_color"]
+            geom_diff = any(a[k] != b[k] for k in geom_keys)
+
+            if geom_diff:
+                self.diff_shapes.append(
+                    {
+                        "type": "SHAPE_GEOM",
+                        "sheet": sheet,
+                        "name": name,
+                        "a": {k: a[k] for k in geom_keys},
+                        "b": {k: b[k] for k in geom_keys},
+                    }
+                )
+
+            # --- テキスト比較 ---
+            if (a.get("text") or "") != (b.get("text") or ""):
+                self.diff_shapes.append(
+                    {
+                        "type": "SHAPE_TEXT",
+                        "sheet": sheet,
+                        "name": name,
+                        "text_a": a.get("text", ""),
+                        "text_b": b.get("text", ""),
+                    }
+                )
+
+        self._log(
+            f"[INFO] shape diff end sheet={sheet} diff_shapes={len(self.diff_shapes)}"
+        )
+
+
+    # ===============================
+    # shape mark（外形＝枠 / テキスト＝文字）
+    # ===============================
+    def _mark_shapes_red(self, book: xw.Book, sheet: str) -> None:
+        try:
+            sht = book.sheets[sheet]
+        except Exception as e:
+            self._log_err(f"[SHAPE-MARK] sheet get failed sheet={sheet} err={e}")
+            return
+
+        geom_targets = {d["name"] for d in self.diff_shapes if d["type"] == "SHAPE_GEOM" and d["sheet"] == sheet}
+        text_targets = {d["name"] for d in self.diff_shapes if d["type"] == "SHAPE_TEXT" and d["sheet"] == sheet}
+
+        geom_marked = 0
+        text_marked = 0
+
+        for shp in sht.api.Shapes:
+            name = str(shp.Name)
+
+            # 外形差分 → 図形枠を赤
+            if name in geom_targets:
+                try:
+                    shp.Line.Visible = True
+                    shp.Line.ForeColor.RGB = 255  # 赤
+                    shp.Line.Weight = 2
+                    geom_marked += 1
+                except Exception as e:
+                    self._log_err(f"[SHAPE-GEOM-MARK-ERR] name={name} err={e}")
+
+            # テキスト差分 → テキストを赤
+            if name in text_targets:
+                try:
+                    chars = shp.TextFrame.Characters()
+                    chars.Font.Color = 255  # 赤
+                    text_marked += 1
+                except Exception as e:
+                    self._log_err(f"[SHAPE-TEXT-MARK-ERR] name={name} err={e}")
+
+        self._log(f"[MARK] sheet={sheet} shapes_geom={geom_marked} shapes_text={text_marked}")
 
     # -------------------------------------------------
     # mark (CELL-ONLY)
@@ -323,28 +424,6 @@ class ExcelDiffService:
                 self._log_err(f"[CELL-MARK-ERR] sheet={sheet} r={r} c={c} err={e}")
 
         self._log(f"[MARK] sheet={sheet} cells={marked}")
-
-    def _mark_shapes_red(self, book: xw.Book, sheet: str) -> None:
-        try:
-            sht = book.sheets[sheet]
-        except Exception as e:
-            self._log_err(f"[SHAPE-MARK] sheet get failed sheet={sheet} err={e}")
-            return
-
-        targets = {d["name"] for d in self.diff_shapes if d.get("sheet") == sheet}
-        marked = 0
-
-        for shp in sht.api.Shapes:
-            if str(shp.Name) in targets:
-                try:
-                    shp.Line.Visible = True
-                    shp.Line.ForeColor.RGB = 255
-                    shp.Line.Weight = 2
-                    marked += 1
-                except Exception as e:
-                    self._log_err(f"[SHAPE-MARK-ERR] sheet={sheet} name={shp.Name} err={e}")
-
-        self._log(f"[MARK] sheet={sheet} shapes={marked}")
 
     # -------------------------------------------------
     # json

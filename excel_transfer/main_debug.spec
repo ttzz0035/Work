@@ -1,11 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 a = Analysis(
-    ["main.py"],
+    ["main_debug.py"],
     pathex=["."],          # excel_transfer を cwd として扱う
     binaries=[],
     datas=[
-        ("config.ini", ""),          # ★ INI を exe 直下に同梱
         ("data/config", "data/config"),  # 既存 YAML / label.yml
     ],
     hiddenimports=[
