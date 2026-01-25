@@ -1,9 +1,12 @@
-# excel_transfer/utils/configs.py
-import os, yaml, json, configparser
+import os
+import yaml
 from dataclasses import dataclass
 from typing import Dict, Any
 
 
+# ==================================================
+# YAML helpers
+# ==================================================
 def _load_yaml(path: str, default=None):
     if not os.path.exists(path):
         return default if default is not None else {}
@@ -17,6 +20,63 @@ def _save_yaml(path: str, data: dict):
         yaml.dump(data, f, allow_unicode=True)
 
 
+# ==================================================
+# デフォルト定義（公開 EXE の正）
+# ==================================================
+DEFAULT_APP_SETTINGS = {
+    "app": {
+        "window_size": "900x650",
+        "default_dir": "",
+    },
+    "components": {
+        "transfer_config": {"row": 0, "width": 70},
+        "grep_root": {"row": 0, "width": 70},
+        "grep_keyword": {"row": 1, "width": 40},
+        "diff_file_a": {"row": 0, "width": 70},
+        "diff_file_b": {"row": 1, "width": 70},
+        "diff_key_cols": {"row": 2, "width": 40},
+    },
+}
+
+
+# ==================================================
+# 起動保証用ラベル（JA 完全集合）
+# ==================================================
+DEFAULT_LABELS_JA = {
+    "app_title": "Offismith",
+
+    "section_excel": "Excel",
+    "section_transfer": "転記",
+    "section_grep": "Grep",
+    "section_diff": "Diff",
+    "section_count": "Count",
+
+    "label_log": "ログ",
+    "button_run": "実行",
+    "button_ellipsis": "...",
+    "button_html_report": "HTMLレポート",
+
+    "menu_license": "License",
+    "menu_about": "About",
+    "menu_third_party_licenses": "Third Party Licenses",
+}
+
+
+# ==================================================
+# タブ表示デフォルト（INI 廃止）
+# ==================================================
+DEFAULT_TABS_ENABLED = {
+    "tab1": True,  # ExcelViewer
+    "tab2": True,  # Transfer
+    "tab3": True,  # Grep
+    "tab4": True,  # Diff
+    "tab5": True,  # Count
+}
+
+
+# ==================================================
+# Context
+# ==================================================
 @dataclass
 class AppContext:
     base_dir: str
@@ -26,8 +86,6 @@ class AppContext:
     app_settings: Dict[str, Any]
     user_paths: Dict[str, Any]
     user_paths_file: str
-
-    # ★ 追加（これだけ）
     tabs_enabled: Dict[str, bool]
 
     def save_user_path(self, key: str, value: str):
@@ -40,65 +98,71 @@ class AppContext:
         return self.app_settings.get("app", {}).get("default_dir", "") or self.base_dir
 
 
+# ==================================================
+# labels loader（言語別・フォールバック無し）
+# ==================================================
+def _load_labels(config_dir: str, lang: str) -> Dict[str, Any]:
+    path = os.path.join(config_dir, "labels", f"{lang}.yaml")
+    if not os.path.isfile(path):
+        raise FileNotFoundError(path)
+    return _load_yaml(path, default=None)
+
+
+# ==================================================
+# Context loader
+# ==================================================
 def load_context(base_dir: str, logger) -> AppContext:
+    # ------------------------------------------
+    # directories
+    # ------------------------------------------
     config_dir = os.path.join(base_dir, "data", "config")
     os.makedirs(config_dir, exist_ok=True)
+
     output_dir = os.path.join(base_dir, "outputs")
     os.makedirs(output_dir, exist_ok=True)
 
-    app_settings = _load_yaml(os.path.join(config_dir, "app_settings.yaml"), default={
-        "app": {"window_size": "900x650", "default_dir": ""},
-        "components": {
-            "transfer_config": {"row":0,"width":70},
-            "grep_root": {"row":0,"width":70},
-            "grep_keyword": {"row":1,"width":40},
-            "diff_file_a": {"row":0,"width":70},
-            "diff_file_b": {"row":1,"width":70},
-            "diff_key_cols": {"row":2,"width":40}
-        }
-    })
+    # ------------------------------------------
+    # app settings
+    # ------------------------------------------
+    app_settings = DEFAULT_APP_SETTINGS.copy()
+    app_settings.update(
+        _load_yaml(
+            os.path.join(config_dir, "app_settings.yaml"),
+            default={},
+        )
+    )
+    logger.debug(f"[CONFIG] app_settings={app_settings}")
 
-    labels = _load_yaml(os.path.join(config_dir, "label.yml"), default={
-        "ja": {
-            "app_title": "Excel ユーティリティ（転記 / Grep / Diff / Count）",
-            "section_transfer": "転記",
-            "section_grep": "Grep（横断検索）",
-            "section_diff": "Diff（差分）",
-            "label_transfer_config": "転記定義CSV",
-            "button_transfer": "実行",
-            "label_grep_root": "検索ルートフォルダ",
-            "label_grep_keyword": "検索キーワード",
-            "button_grep": "実行",
-            "label_diff_file_a": "File A",
-            "label_diff_file_b": "File B",
-            "label_diff_key_cols": "主キー列（カンマ区切り）",
-            "button_diff": "実行",
-            "check_ignore_case": "大文字小文字を無視",
-            "check_compare_formula": "数式で比較（表示値ではなく）"
-        }
-    })["ja"]
-
+    # ------------------------------------------
+    # user paths（先に読む）
+    # ------------------------------------------
     user_paths_file = os.path.join(base_dir, "user_paths.yaml")
     user_paths = _load_yaml(user_paths_file, default={})
 
-    # ==================================================
-    # ★ ここから追加（INI Tabs 読み取り）
-    # ==================================================
-    tabs_enabled: Dict[str, bool] = {}
-    ini_path = os.path.join(base_dir, "config.ini")
-    if os.path.exists(ini_path):
-        config = configparser.ConfigParser()
-        config.read(ini_path, encoding="utf-8")
-        if "Tabs" in config:
-            for k, v in config["Tabs"].items():
-                enabled = v.lower() == "true"
-                tabs_enabled[k] = enabled
-                logger.info(f"[CONFIG] tab {k} enabled={enabled}")
-    else:
-        logger.info("[CONFIG] config.ini not found (tab filter disabled)")
-    # ==================================================
+    # ------------------------------------------
+    # language（次回起動用）
+    # ------------------------------------------
+    lang = user_paths.get("app_lang")
+    if not lang:
+        lang = "ja"
+    logger.info(f"[CONFIG] language={lang}")
 
-    return AppContext(
+    # ------------------------------------------
+    # labels
+    # ------------------------------------------
+    labels = DEFAULT_LABELS_JA.copy()
+    labels.update(_load_labels(config_dir, lang))
+    logger.debug(
+        f"[CONFIG] labels(lang={lang}) keys={sorted(labels.keys())}"
+    )
+
+    # ------------------------------------------
+    # tabs
+    # ------------------------------------------
+    tabs_enabled = DEFAULT_TABS_ENABLED.copy()
+    logger.info("[CONFIG] tabs_enabled=default (INI disabled)")
+
+    ctx = AppContext(
         base_dir=base_dir,
         output_dir=output_dir,
         config_dir=config_dir,
@@ -106,5 +170,10 @@ def load_context(base_dir: str, logger) -> AppContext:
         app_settings=app_settings,
         user_paths=user_paths,
         user_paths_file=user_paths_file,
-        tabs_enabled=tabs_enabled,   # ★ 追加
+        tabs_enabled=tabs_enabled,
     )
+
+    # lang を Context に保持
+    ctx.lang = lang
+
+    return ctx

@@ -24,7 +24,7 @@ class ExcelDiffService:
         self._summary: Dict[str, Any] = {}
 
     # -------------------------------------------------
-    # logging
+    # logging (EN only, UI-friendly)
     # -------------------------------------------------
     def _log(self, msg: str) -> None:
         try:
@@ -52,10 +52,10 @@ class ExcelDiffService:
     # public
     # -------------------------------------------------
     def run(self) -> str:
-        self._log("=== Diff開始 ===")
+        self._log("=== DIFF START ===")
 
         if not self.req.range_a or not self.req.range_b:
-            raise ValueError("range_a / range_b は必須です（空不可）")
+            raise ValueError("range_a / range_b is required")
 
         base = str(getattr(self.req, "base_file", "B") or "B").upper()
         if base not in ("A", "B"):
@@ -117,7 +117,7 @@ class ExcelDiffService:
             book_diff.save()
 
         except Exception as ex:
-            self._log_err(f"[ERR] Diff: {ex}")
+            self._log_err(f"[ERR] DIFF FAILED: {ex}")
             raise
 
         finally:
@@ -146,12 +146,12 @@ class ExcelDiffService:
 
         self._write_json(json_path)
 
-        self._log(f"[OK] 出力ファイル: {diff_path}")
-        self._log("=== Diff完了 ===")
+        self._log(f"[OK] DIFF FILE: {diff_path}")
+        self._log("=== DIFF END ===")
         return diff_path
 
     # -------------------------------------------------
-    # sheet resolve (NO .names)
+    # sheet resolve
     # -------------------------------------------------
     def _resolve_sheet_pairs(self, book_diff: xw.Book, book_other: xw.Book, mode: str):
         pairs: List[Tuple[str, xw.Sheet, xw.Sheet]] = []
@@ -175,20 +175,21 @@ class ExcelDiffService:
                 try:
                     diff_map[str(sht.name)] = sht
                 except Exception as e:
-                    self._log_err(f"[SHEET] diff sheet name read failed err={e}")
+                    self._log_err(f"[SHEET] diff name read failed: {e}")
 
             for sht in book_other.sheets:
                 try:
                     other_map[str(sht.name)] = sht
                 except Exception as e:
-                    self._log_err(f"[SHEET] other sheet name read failed err={e}")
+                    self._log_err(f"[SHEET] other name read failed: {e}")
 
-            common = sorted(set(diff_map.keys()) & set(other_map.keys()))
-            only_diff = sorted(set(diff_map.keys()) - set(other_map.keys()))
-            only_other = sorted(set(other_map.keys()) - set(diff_map.keys()))
+            common = sorted(set(diff_map) & set(other_map))
+            only_diff = sorted(set(diff_map) - set(other_map))
+            only_other = sorted(set(other_map) - set(diff_map))
 
             self._log(
-                f"[SHEET] mode=name common={len(common)} only_diff={len(only_diff)} only_other={len(only_other)}"
+                f"[SHEET] name-mode common={len(common)} "
+                f"only_diff={len(only_diff)} only_other={len(only_other)}"
             )
 
             for name in common:
@@ -211,7 +212,10 @@ class ExcelDiffService:
         rng_base = self.req.range_b if base == "B" else self.req.range_a
         rng_other = self.req.range_a if base == "B" else self.req.range_b
 
-        self._log(f"[INFO] diff start sheet={sheet} base={base} range_base={rng_base} range_other={rng_other}")
+        self._log(
+            f"[CELL] start sheet={sheet} base={base} "
+            f"range_base={rng_base} range_other={rng_other}"
+        )
 
         area_base = sht_base.range(rng_base)
         area_other = sht_other.range(rng_other)
@@ -219,7 +223,7 @@ class ExcelDiffService:
         rows = area_base.rows.count
         cols = area_base.columns.count
 
-        self._log(f"[INFO] read cells rows={rows} cols={cols}")
+        self._log(f"[CELL] read rows={rows} cols={cols}")
 
         vals_base = area_base.options(ndim=2, empty=None).value
         vals_other = area_other.options(ndim=2, empty=None).value
@@ -248,34 +252,15 @@ class ExcelDiffService:
                         }
                     )
 
-        self._log(f"[INFO] diff end sheet={sheet} diff_cells={hit}")
+        self._log(f"[CELL] end sheet={sheet} diff_cells={hit}")
 
     # -------------------------------------------------
-    # helpers
+    # shape helpers
     # -------------------------------------------------
-    def _read_range(self, sht: xw.Sheet, rng: str) -> Dict[int, Dict[int, Any]]:
-        area = sht.range(rng)
-        values = area.formula if getattr(self.req, "compare_formula", False) else area.value
-
-        out: Dict[int, Dict[int, Any]] = {}
-        sr, sc = area.row, area.column
-
-        for ro, row in enumerate(values):
-            if not isinstance(row, list):
-                row = [row]
-            if not any(v is not None for v in row):
-                continue
-            out[sr + ro] = {sc + c: v for c, v in enumerate(row)}
-        return out
-
-    # ===============================
-    # shape read（外形＋テキスト）
-    # ===============================
     def _read_shapes(self, sht: xw.Sheet) -> Dict[str, Dict[str, Any]]:
         out: Dict[str, Dict[str, Any]] = {}
         for shp in sht.api.Shapes:
             try:
-                text = ""
                 try:
                     text = shp.TextFrame.Characters().Text
                 except Exception:
@@ -292,46 +277,40 @@ class ExcelDiffService:
                     "text": text or "",
                 }
             except Exception as e:
-                self._log_err(f"[SHAPE-READ-ERR] sheet={sht.name} err={e}")
+                self._log_err(f"[SHAPE] read failed sheet={sht.name}: {e}")
         return out
 
-
-    # ===============================
-    # shape diff（外形 / テキスト分離）
-    # ===============================
     def _diff_shapes_core(self, sht_base: xw.Sheet, sht_other: xw.Sheet, sheet: str) -> None:
         base_shapes = self._read_shapes(sht_base)
         other_shapes = self._read_shapes(sht_other)
 
-        names_base = set(base_shapes.keys())
-        names_other = set(other_shapes.keys())
+        names_base = set(base_shapes)
+        names_other = set(other_shapes)
 
         self._log(
-            f"[INFO] shape diff start sheet={sheet} "
-            f"base={len(names_base)} other={len(names_other)}"
+            f"[SHAPE] start sheet={sheet} base={len(names_base)} other={len(names_other)}"
         )
 
-        # ADD / DEL
         for name in sorted(names_base - names_other):
-            self.diff_shapes.append(
-                {"type": "SHAPE_DEL", "sheet": sheet, "name": name}
-            )
+            self.diff_shapes.append({"type": "SHAPE_DEL", "sheet": sheet, "name": name})
 
         for name in sorted(names_other - names_base):
-            self.diff_shapes.append(
-                {"type": "SHAPE_ADD", "sheet": sheet, "name": name}
-            )
+            self.diff_shapes.append({"type": "SHAPE_ADD", "sheet": sheet, "name": name})
 
-        # 共通図形
         for name in sorted(names_base & names_other):
             a = base_shapes[name]
             b = other_shapes[name]
 
-            # --- 外形比較 ---
-            geom_keys = ["top", "left", "width", "height", "rotation", "line_color", "fill_color"]
-            geom_diff = any(a[k] != b[k] for k in geom_keys)
-
-            if geom_diff:
+            geom_keys = [
+                "top",
+                "left",
+                "width",
+                "height",
+                "rotation",
+                "line_color",
+                "fill_color",
+            ]
+            if any(a[k] != b[k] for k in geom_keys):
                 self.diff_shapes.append(
                     {
                         "type": "SHAPE_GEOM",
@@ -342,7 +321,6 @@ class ExcelDiffService:
                     }
                 )
 
-            # --- テキスト比較 ---
             if (a.get("text") or "") != (b.get("text") or ""):
                 self.diff_shapes.append(
                     {
@@ -354,76 +332,55 @@ class ExcelDiffService:
                     }
                 )
 
-        self._log(
-            f"[INFO] shape diff end sheet={sheet} diff_shapes={len(self.diff_shapes)}"
-        )
+        self._log(f"[SHAPE] end sheet={sheet} diff_shapes={len(self.diff_shapes)}")
 
-
-    # ===============================
-    # shape mark（外形＝枠 / テキスト＝文字）
-    # ===============================
+    # -------------------------------------------------
+    # mark
+    # -------------------------------------------------
     def _mark_shapes_red(self, book: xw.Book, sheet: str) -> None:
         try:
             sht = book.sheets[sheet]
         except Exception as e:
-            self._log_err(f"[SHAPE-MARK] sheet get failed sheet={sheet} err={e}")
+            self._log_err(f"[SHAPE] sheet not found: {sheet} ({e})")
             return
 
-        geom_targets = {d["name"] for d in self.diff_shapes if d["type"] == "SHAPE_GEOM" and d["sheet"] == sheet}
-        text_targets = {d["name"] for d in self.diff_shapes if d["type"] == "SHAPE_TEXT" and d["sheet"] == sheet}
-
-        geom_marked = 0
-        text_marked = 0
+        geom_targets = {
+            d["name"]
+            for d in self.diff_shapes
+            if d["type"] == "SHAPE_GEOM" and d["sheet"] == sheet
+        }
+        text_targets = {
+            d["name"]
+            for d in self.diff_shapes
+            if d["type"] == "SHAPE_TEXT" and d["sheet"] == sheet
+        }
 
         for shp in sht.api.Shapes:
             name = str(shp.Name)
 
-            # 外形差分 → 図形枠を赤
             if name in geom_targets:
                 try:
                     shp.Line.Visible = True
-                    shp.Line.ForeColor.RGB = 255  # 赤
+                    shp.Line.ForeColor.RGB = 255
                     shp.Line.Weight = 2
-                    geom_marked += 1
                 except Exception as e:
-                    self._log_err(f"[SHAPE-GEOM-MARK-ERR] name={name} err={e}")
+                    self._log_err(f"[SHAPE] geom mark failed {name}: {e}")
 
-            # テキスト差分 → テキストを赤
             if name in text_targets:
                 try:
-                    chars = shp.TextFrame.Characters()
-                    chars.Font.Color = 255  # 赤
-                    text_marked += 1
+                    shp.TextFrame.Characters().Font.Color = 255
                 except Exception as e:
-                    self._log_err(f"[SHAPE-TEXT-MARK-ERR] name={name} err={e}")
+                    self._log_err(f"[SHAPE] text mark failed {name}: {e}")
 
-        self._log(f"[MARK] sheet={sheet} shapes_geom={geom_marked} shapes_text={text_marked}")
-
-    # -------------------------------------------------
-    # mark (CELL-ONLY)
-    # -------------------------------------------------
     def _mark_cells_red_xlwings(self, sht: xw.Sheet, sheet: str) -> None:
-        marked = 0
         for d in self.diff_cells:
             if d.get("sheet") != sheet:
                 continue
-
-            r = int(d["row"])
-            c = int(d["col"])
-
             try:
-                # ★ 必ず「1セル」だけを指定する（cells の解釈揺れを避ける）
-                cell = sht.range((r, c))
+                cell = sht.range((int(d["row"]), int(d["col"])))
                 cell.api.Interior.Color = 0x6666FF
-                try:
-                    cell.api.Borders.Weight = 2
-                except Exception:
-                    pass
-                marked += 1
             except Exception as e:
-                self._log_err(f"[CELL-MARK-ERR] sheet={sheet} r={r} c={c} err={e}")
-
-        self._log(f"[MARK] sheet={sheet} cells={marked}")
+                self._log_err(f"[CELL] mark failed sheet={sheet}: {e}")
 
     # -------------------------------------------------
     # json
@@ -438,7 +395,7 @@ class ExcelDiffService:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
 
-        self._log(f"[OK] JSON出力: {path}")
+        self._log(f"[OK] JSON OUTPUT: {path}")
 
 
 def run_diff(req: DiffRequest, ctx, logger, append_log: LogFn) -> str:

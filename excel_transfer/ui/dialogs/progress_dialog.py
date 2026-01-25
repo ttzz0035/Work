@@ -6,12 +6,16 @@ from tkinter import ttk
 
 
 class ProgressDialog:
-    def __init__(self, parent: tk.Tk, message: str = "処理中..."):
+    def __init__(self, parent: tk.Tk, ctx, message: str | None = None):
         self._closed = False
         self.parent = parent
+        self.ctx = ctx
+
+        if message is None:
+            message = self.ctx.labels["progress_message_default"]
 
         self.win = tk.Toplevel(parent)
-        self.win.title("Processing")
+        self.win.title(self.ctx.labels["progress_title"])
         self.win.resizable(False, False)
         self.win.transient(parent)
         self.win.grab_set()
@@ -35,7 +39,7 @@ class ProgressDialog:
         self.pb.start(10)
 
         # ----------------------------------------
-        # 中央配置（ここが追加ポイント）
+        # 中央配置
         # ----------------------------------------
         self._center_to_parent()
 

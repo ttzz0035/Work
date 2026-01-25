@@ -1,0 +1,279 @@
+  app_title: "Offismith"
+
+  # tabs
+  section_excel: "簡易Viewer"
+  section_transfer: "転記"
+  section_grep: "Grepl検索/置換"
+  section_diff: "差分検出"
+  section_count: "回数カウント"
+
+  # common
+  label_log: "ログ"
+  button_run: "実行"
+  button_ellipsis: "..."
+  button_html_report: "HTMLレポート"
+  msg_progress_running: "{name} 実行中"
+  msg_report_title: "レポート"
+  msg_report_done_html: "HTMLレポートを出力しました\n{path}"
+
+  # menu
+  menu_license: "License"
+  menu_about: "About"
+  menu_third_party_licenses: "Third Party Licenses"
+
+  # about
+  about_title: "About"
+  about_version: "Version {version}"
+  about_copyright: "© 2026 Your Company / Your Name"
+
+  # transfer
+  transfer_group: "転記"
+  label_transfer_config: "転記定義CSV"
+  button_transfer_create: "作成"
+  check_transfer_skip_oor: "範囲外セルをスキップ（警告のみ）"
+  msg_transfer_done: "転記完了: {note}"
+
+  # grep
+  grep_group: "Grep"
+  label_grep_root: "検索フォルダ"
+  label_grep_keyword: "検索キーワード"
+  check_ignore_case: "大文字小文字を無視"
+  check_grep_regex: "正規表現"
+  label_grep_file_regex: "ファイル名（正規表現）"
+  label_grep_sheet_regex: "シート（正規表現）"
+  label_grep_offset: "ヒット後オフセット"
+  label_grep_offset_row: "行"
+  label_grep_offset_col: "列"
+  check_grep_replace_enabled: "置換する"
+  label_grep_replace_mode: "置換モード"
+  radio_grep_replace_preview: "プレビュー"
+  radio_grep_replace_auto: "自動"
+  dialog_select_grep_json_title: "Grep JSON を選択"
+  dialog_save_html_title: "HTMLレポートを保存"
+
+  # diff
+  diff_group_files: "ファイル"
+  diff_group_range_required: "比較範囲"
+  diff_label_range_a: "範囲 A"
+  diff_label_range_b: "範囲 B"
+  diff_group_base: "比較基準"
+  diff_radio_base_b_default: "B を基準"
+  diff_radio_base_a: "A を基準"
+  diff_group_options: "オプション"
+  check_compare_formula: "数式で比較"
+  check_diff_include_context: "リンク／コンテキスト"
+  check_diff_compare_shapes: "図形・画像も比較"
+  diff_group_sheet_mode: "シート比較"
+  diff_radio_sheet_index_default: "インデックス一致（既定）"
+  diff_radio_sheet_name: "シート名一致"
+  button_diff_make: "差分作成"
+  dialog_select_diff_json_title: "Diff JSON を選択"
+
+  label_diff_file_a: "File A"
+  label_diff_file_b: "File B"
+  label_diff_key_cols: "主キー列"
+
+  # count
+  count_group: "Count"
+  label_count_files: "対象Excel"
+  label_count_sheet: "シート名（空=先頭）"
+  label_count_start: "開始セル"
+  radio_count_dir_row: "行"
+  radio_count_dir_col: "列"
+  label_count_tolerate_blanks: "許容空白数"
+
+  # excel viewer
+  viewer_left: "左"
+  viewer_right: "右"
+  viewer_label_book: "ブック"
+  viewer_button_add: "追加"
+  viewer_label_sheet: "シート"
+
+  # preview replace dialog
+  preview_title: "置換プレビュー"
+
+  preview_col_checked: "✔"
+  preview_col_file: "File"
+  preview_col_sheet: "Sheet"
+  preview_col_hit: "Hit"
+  preview_col_target: "Target"
+  preview_col_before: "Before"
+  preview_col_replace: "Replace"
+
+  preview_btn_select_all: "全選択"
+  preview_btn_clear_all: "全解除"
+  preview_btn_cancel: "Cancel"
+  preview_btn_ok: "OK"
+
+  # progress
+  progress_title: "Processing"
+  progress_message_default: "処理中"
+
+  # transfer csv builder
+  transfer_builder_title: "転記CSV作成"
+  transfer_builder_group_candidate: "候補"
+  transfer_builder_group_confirmed: "確定内容"
+
+  transfer_builder_btn_confirm: "確定"
+  transfer_builder_btn_remove: "削除"
+  transfer_builder_btn_create_csv: "CSV作成"
+
+  transfer_builder_file_src: "ファイルA（元）"
+  transfer_builder_file_dst: "ファイルB（先）"
+
+  transfer_builder_label_book: "ブック"
+  transfer_builder_label_sheet: "シート"
+  transfer_builder_btn_add: "追加"
+
+  transfer_builder_candidate_none: "未選択"
+  transfer_builder_candidate_format: "A: {src} → B: {dst}"
+
+  transfer_builder_error_title: "転記エラー"
+  transfer_builder_error_cell_mismatch: "セル数が一致しません"
+
+  # excel diff html
+  diff_html_title: "Excel Diff Report"
+
+  diff_html_meta_title: "Meta"
+  diff_html_meta_file_a: "File A"
+  diff_html_meta_file_b: "File B"
+  diff_html_meta_range_a: "Range A"
+  diff_html_meta_range_b: "Range B"
+  diff_html_meta_base_file: "Base"
+  diff_html_meta_compare_formula: "Formula"
+  diff_html_meta_compare_shapes: "Shapes"
+
+  diff_html_summary_title: "Summary"
+  diff_html_summary_cell_mod: "Cells"
+  diff_html_summary_shape_diff: "Shapes"
+  diff_html_summary_base_file: "Base"
+
+  diff_html_cell_title: "Cell Diff"
+  diff_html_cell_no: "No"
+  diff_html_cell_sheet: "Sheet"
+  diff_html_cell_row: "Row"
+  diff_html_cell_col: "Col"
+  diff_html_cell_type: "Type"
+  diff_html_cell_value_a: "A"
+  diff_html_cell_value_b: "B"
+  diff_html_cell_base: "Base"
+  diff_html_cell_none: "No diff"
+
+  diff_html_shape_title: "Shape Diff"
+  diff_html_shape_name: "Name"
+  diff_html_shape_type: "Type"
+  diff_html_shape_detail_a: "A"
+  diff_html_shape_detail_b: "B"
+  diff_html_shape_none: "No diff"
+
+  # excel grep html
+  grep_html_title: "Excel Grep Report"
+
+  grep_html_meta_title: "Meta"
+  grep_html_meta_keyword: "Keyword"
+  grep_html_meta_use_regex: "Regex"
+  grep_html_meta_file_regex: "File Regex"
+  grep_html_meta_sheet_regex: "Sheet Regex"
+  grep_html_meta_offset_row: "Row Offset"
+  grep_html_meta_offset_col: "Col Offset"
+  grep_html_meta_replace_pattern: "Replace"
+  grep_html_meta_replace_mode: "Mode"
+
+  grep_html_summary_title: "Summary"
+  grep_html_summary_files: "Files"
+  grep_html_summary_sheets: "Sheets"
+  grep_html_summary_hits: "Hits"
+  grep_html_summary_checked: "Checked"
+  grep_html_summary_diff: "Changed"
+
+  grep_html_results_title: "Results"
+  grep_html_col_no: "No"
+  grep_html_col_file: "File"
+  grep_html_col_sheet: "Sheet"
+  grep_html_col_hit: "Hit"
+  grep_html_col_target: "Target"
+  grep_html_col_before: "Before"
+  grep_html_col_after: "After"
+  grep_html_col_checked: "Checked"
+
+  grep_html_no_result: "No result"
+
+  # =========================
+  # common / runtime logs
+  # =========================
+  log_run_start: "[RUN] {name} start"
+  log_run_done: "[RUN] {name} done"
+  log_run_error: "[ERR] {name}: {error}"
+
+  # =========================
+  # license
+  # =========================
+  log_license_block: "[LICENSE][BLOCK] {error}"
+  log_license_missing_debug: "[LICENSE][DEBUG] license_manager missing -> skipped"
+  log_license_missing: "[LICENSE] license_manager is missing (debug build)"
+  err_license_manager_required: "ctx.license_manager is required"
+
+  log_license_get_state_failed_debug: "[LICENSE][DEBUG] get_state failed -> skipped ({error})"
+  log_license_get_state_failed: "[LICENSE] get_state failed (debug build)"
+
+  log_license_subscribed: "[LICENSE] subscribed"
+  log_license_trial: "[LICENSE] trial remain={days}"
+  err_license_expired: "License expired"
+
+  # =========================
+  # transfer
+  # =========================
+  log_ui_open_transfer_builder: "[UI] open transfer csv builder"
+
+  # =========================
+  # grep
+  # =========================
+  log_grep_replace_enabled: "[GREP][UI] replace_enabled={enabled}"
+  log_grep_error: "[ERR] Grep: {error}"
+
+  log_grep_preview_no_items: "[GREP] preview: no replace items"
+  log_grep_result: "[OK] Grep結果: {out} / {count}件"
+  log_grep_preview_canceled: "[GREP] preview canceled"
+  log_grep_preview_accepted: "[GREP] preview accepted items={count}"
+
+  # =========================
+  # diff
+  # =========================
+  log_diff_error: "[ERR] Diff: {error}"
+  log_diff_result: "[OK] 差分レポート: {out}"
+
+  log_ui_select_diff_json: "[UI] select diff json"
+  log_ui_canceled_json: "[UI] canceled (json)"
+  log_ui_select_diff_html: "[UI] select output html"
+  log_ui_canceled_html: "[UI] canceled (html)"
+  log_diff_html_done: "[OK] HTMLレポート: {path}"
+
+  # =========================
+  # count
+  # =========================
+  log_count_result: "[OK] Count結果: {out}"
+
+  # =========================
+  # excel viewer / app
+  # =========================
+  log_ui_open_third_party: "[UI] open Third Party Licenses"
+  err_third_party_missing: "third_party_licenses_text is not loaded"
+
+  log_ui_open_about: "[UI] open About"
+
+  # =========================
+  # language
+  # =========================
+  log_language_change_request: "[UI] language change requested: {from} -> {to} (apply on next start)"
+  log_language_apply_next_start: "[INFO] Language will be applied on next startup: {lang}"
+  log_language_restart: "[UI] restart app for language change"
+
+  # =========================
+  # internal
+  # =========================
+  err_tab_not_implemented: "Tab must implement _run_impl()"
+
+  filetype_excel: Excel Files
+  filetype_csv: CSV Files
+  filetype_json: JSON Files
+  filetype_html: HTML Files

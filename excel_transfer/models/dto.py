@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Dict, Any
 
 
 LogFn = Callable[[str], None]
@@ -90,3 +90,17 @@ class DiffRequest:
     # 将来拡張用（明示シート指定）
     sheet_a: str = ""
     sheet_b: str = ""
+
+# -------------------------------------------------
+# Diff (Result)  ※単一DTOのみ追加
+# -------------------------------------------------
+@dataclass
+class DiffResult:
+    diff_path: str
+    json_path: str
+
+    meta: Dict[str, Any] = field(default_factory=dict)
+    summary: Dict[str, Any] = field(default_factory=dict)
+
+    diff_cells: List[Dict[str, Any]] = field(default_factory=list)
+    diff_shapes: List[Dict[str, Any]] = field(default_factory=list)

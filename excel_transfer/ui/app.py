@@ -5,11 +5,14 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
 import json
+
 from ui.dialogs.progress_dialog import ProgressDialog
 from ui.dialogs.transfer_csv_builder import TransferCsvBuilderDialog
 from ui.dialogs.preview_dialog import PreviewReplaceDialog
 from ui.components.excel_canvas import ExcelCanvas
 from models.dto import GrepRequest, DiffRequest, TransferRequest, CountRequest
+from models.dto import DiffResult
+
 from services.transfer import run_transfer_from_csvs
 from services.grep import run_grep
 from services.diff import run_diff
@@ -45,7 +48,7 @@ class BaseTab:
                 self.logger.error(f"[LICENSE][BLOCK] {e}", exc_info=True)
             return
 
-        self.app.show_progress(f"{name} 実行中...")
+        self.app.show_progress(self.ctx.labels["msg_progress_running"].format(name=name))
 
         try:
             self._run_impl()
@@ -111,16 +114,19 @@ class BaseTab:
     def _run_impl(self):
         raise NotImplementedError("Tab must implement _run_impl()")
 
+
 # =========================================================
 # Transfer Tab
 # =========================================================
 class TransferTab(BaseTab):
     def __init__(self, app):
         super().__init__(app, app.ctx.labels["section_transfer"])
+        self.entry = None
+        self.var_skip = None
         self.build()
 
     def build(self):
-        frm = ttk.LabelFrame(self.tab, text="転記")
+        frm = ttk.LabelFrame(self.tab, text=self.ctx.labels["transfer_group"])
         frm.grid(row=0, column=0, sticky="we", padx=4, pady=4)
         frm.grid_columnconfigure(1, weight=1)
 
@@ -131,16 +137,18 @@ class TransferTab(BaseTab):
 
         ttk.Button(
             frm,
-            text="...",
+            text=self.ctx.labels["button_ellipsis"],
             width=3,
             command=lambda: self.app.choose_files(
-                self.entry, "transfer_config", [("CSV Files", "*.csv")]
+                self.entry,
+                "transfer_config",
+                [(self.ctx.labels["filetype_csv"], "*.csv")],
             ),
         ).grid(row=0, column=2, padx=(0, 4))
 
         ttk.Button(
             frm,
-            text="作成",
+            text=self.ctx.labels["button_transfer_create"],
             width=5,
             command=self.open_builder,
         ).grid(row=0, column=3, padx=(0, 4))
@@ -150,29 +158,31 @@ class TransferTab(BaseTab):
         )
         ttk.Checkbutton(
             frm,
-            text="範囲外セルはスキップ（警告のみ）",
+            text=self.ctx.labels["check_transfer_skip_oor"],
             variable=self.var_skip,
         ).grid(row=1, column=1, sticky="w", padx=4, pady=(2, 0))
 
-        ttk.Button(self.tab, text="実行", command=self.run).grid(
+        ttk.Button(self.tab, text=self.ctx.labels["button_run"], command=self.run).grid(
             row=1, column=1, sticky="ne", padx=6, pady=6
         )
 
         self.tab.grid_columnconfigure(0, weight=1)
 
+    def _on_created_transfer_csv(self, path: str):
+        if not self.entry:
+            return
+        self.entry.delete(0, tk.END)
+        self.entry.insert(0, path)
+        self.ctx.save_user_path("transfer_config", path)
+
     def open_builder(self):
         self.logger.info("[UI] open transfer csv builder")
-
-        def on_created(path: str):
-            self.entry.delete(0, tk.END)
-            self.entry.insert(0, path)
-            self.ctx.save_user_path("transfer_config", path)
 
         TransferCsvBuilderDialog(
             parent=self.tab,
             ctx=self.ctx,
             logger=self.logger,
-            on_created=on_created,
+            on_created=self._on_created_transfer_csv,
         )
 
     def _run_impl(self):
@@ -188,7 +198,7 @@ class TransferTab(BaseTab):
         )
 
         note = run_transfer_from_csvs(req, self.ctx, self.logger, self.log)
-        self.log(f"[OK] 転記完了: {note}")
+        self.log(self.ctx.labels["msg_transfer_done"].format(note=note))
 
 
 # =========================================================
@@ -197,13 +207,26 @@ class TransferTab(BaseTab):
 class GrepTab(BaseTab):
     def __init__(self, app):
         super().__init__(app, app.ctx.labels["section_grep"])
+        self.root_entry = None
+        self.kw_entry = None
+        self.var_ic = None
+        self.var_rx = None
+        self.file_rx_entry = None
+        self.sheet_rx_entry = None
+        self.offset_row = None
+        self.offset_col = None
+        self.var_replace_enabled = None
+        self.replace_entry = None
+        self.var_mode = None
+        self.rb_preview = None
+        self.rb_auto = None
         self.build()
 
     def build(self):
         self.tab.grid_columnconfigure(0, weight=1)
 
         # --- main ---
-        frm = ttk.LabelFrame(self.tab, text="Grep")
+        frm = ttk.LabelFrame(self.tab, text=self.ctx.labels["grep_group"])
         frm.grid(row=0, column=0, sticky="we", padx=4, pady=4)
         frm.grid_columnconfigure(1, weight=1)
 
@@ -214,7 +237,7 @@ class GrepTab(BaseTab):
         self.root_entry.insert(0, self.ctx.user_paths.get("grep_root", ""))
 
         ttk.Button(
-            frm, text="...", width=3,
+            frm, text=self.ctx.labels["button_ellipsis"], width=3,
             command=lambda: self.app.choose_dir(self.root_entry, "grep_root"),
         ).grid(row=0, column=2, padx=(0, 4))
 
@@ -233,16 +256,16 @@ class GrepTab(BaseTab):
         opt = ttk.Frame(frm)
         opt.grid(row=2, column=1, sticky="w", padx=4, pady=(4, 0))
         ttk.Checkbutton(opt, text=self.ctx.labels["check_ignore_case"], variable=self.var_ic).pack(side="left")
-        ttk.Checkbutton(opt, text="正規表現", variable=self.var_rx).pack(side="left", padx=(8, 0))
+        ttk.Checkbutton(opt, text=self.ctx.labels["check_grep_regex"], variable=self.var_rx).pack(side="left", padx=(8, 0))
 
         # --- File name regex ---
-        ttk.Label(frm, text="ファイル名（正規表現）").grid(row=3, column=0, sticky="w", pady=(8, 0))
+        ttk.Label(frm, text=self.ctx.labels["label_grep_file_regex"]).grid(row=3, column=0, sticky="w", pady=(8, 0))
         self.file_rx_entry = tk.Entry(frm, width=40)
         self.file_rx_entry.grid(row=3, column=1, sticky="w", padx=4, pady=(8, 0))
         self.file_rx_entry.insert(0, self.ctx.user_paths.get("grep_file_regex", ""))
 
         # --- Sheet regex ---
-        ttk.Label(frm, text="シート（正規表現）※名前 or 番号").grid(
+        ttk.Label(frm, text=self.ctx.labels["label_grep_sheet_regex"]).grid(
             row=4, column=0, sticky="w", pady=(8, 0)
         )
         self.sheet_rx_entry = tk.Entry(frm, width=30)
@@ -250,16 +273,16 @@ class GrepTab(BaseTab):
         self.sheet_rx_entry.insert(0, self.ctx.user_paths.get("grep_sheet_regex", ""))
 
         # --- Offset ---
-        ttk.Label(frm, text="検索ヒットからのオフセット").grid(row=5, column=0, sticky="w", pady=(8, 0))
+        ttk.Label(frm, text=self.ctx.labels["label_grep_offset"]).grid(row=5, column=0, sticky="w", pady=(8, 0))
         off = ttk.Frame(frm)
         off.grid(row=5, column=1, sticky="w", padx=4, pady=(8, 0))
 
-        ttk.Label(off, text="行").pack(side="left")
+        ttk.Label(off, text=self.ctx.labels["label_grep_offset_row"]).pack(side="left")
         self.offset_row = tk.Entry(off, width=6)
         self.offset_row.pack(side="left", padx=(4, 12))
         self.offset_row.insert(0, self.ctx.user_paths.get("grep_offset_row", "0"))
 
-        ttk.Label(off, text="列").pack(side="left")
+        ttk.Label(off, text=self.ctx.labels["label_grep_offset_col"]).pack(side="left")
         self.offset_col = tk.Entry(off, width=6)
         self.offset_col.pack(side="left")
         self.offset_col.insert(0, self.ctx.user_paths.get("grep_offset_col", "0"))
@@ -273,7 +296,7 @@ class GrepTab(BaseTab):
 
         ttk.Checkbutton(
             frm,
-            text="置換を行う",
+            text=self.ctx.labels["check_grep_replace_enabled"],
             variable=self.var_replace_enabled,
             command=self._update_replace_state,
         ).grid(row=6, column=0, sticky="w", pady=(10, 0))
@@ -282,13 +305,13 @@ class GrepTab(BaseTab):
         self.replace_entry.grid(row=6, column=1, sticky="w", padx=4, pady=(10, 0))
         self.replace_entry.insert(0, self.ctx.user_paths.get("grep_replace", ""))
 
-        ttk.Label(frm, text="置換モード").grid(row=7, column=0, sticky="w", pady=(8, 0))
+        ttk.Label(frm, text=self.ctx.labels["label_grep_replace_mode"]).grid(row=7, column=0, sticky="w", pady=(8, 0))
         self.var_mode = tk.StringVar(value=self.ctx.user_paths.get("grep_replace_mode", "preview"))
 
         mode = ttk.Frame(frm)
         mode.grid(row=7, column=1, sticky="w", padx=4, pady=(8, 0))
-        self.rb_preview = ttk.Radiobutton(mode, text="プレビュー", value="preview", variable=self.var_mode)
-        self.rb_auto = ttk.Radiobutton(mode, text="自動置換", value="auto", variable=self.var_mode)
+        self.rb_preview = ttk.Radiobutton(mode, text=self.ctx.labels["radio_grep_replace_preview"], value="preview", variable=self.var_mode)
+        self.rb_auto = ttk.Radiobutton(mode, text=self.ctx.labels["radio_grep_replace_auto"], value="auto", variable=self.var_mode)
         self.rb_preview.pack(side="left")
         self.rb_auto.pack(side="left", padx=(12, 0))
 
@@ -297,11 +320,11 @@ class GrepTab(BaseTab):
         btns.grid(row=1, column=0, sticky="we", padx=4, pady=(4, 0))
         btns.grid_columnconfigure(0, weight=1)
 
-        ttk.Button(btns, text="HTMLレポート", command=self.make_report).grid(
+        ttk.Button(btns, text=self.ctx.labels["button_html_report"], command=self.make_report).grid(
             row=0, column=0, sticky="w", padx=6, pady=6
         )
 
-        ttk.Button(btns, text="実行", command=self.run).grid(
+        ttk.Button(btns, text=self.ctx.labels["button_run"], command=self.run).grid(
             row=0, column=1, sticky="e", padx=6, pady=6
         )
 
@@ -360,8 +383,6 @@ class GrepTab(BaseTab):
 
         # --- preview ---
         if self.var_replace_enabled.get() and req.replace_mode == "preview":
-            import json
-
             with open(out, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
@@ -379,8 +400,8 @@ class GrepTab(BaseTab):
                 self.app.root,
                 items,
                 req.replace_pattern,
+                ctx=self.ctx,
             )
-
             if dlg.result is None:
                 self.log("[GREP] preview canceled")
                 self.log(f"[OK] Grep結果: {out} / {cnt}件")
@@ -401,36 +422,50 @@ class GrepTab(BaseTab):
     # -------------------------------------------------
     def make_report(self):
         json_path = filedialog.askopenfilename(
-            title="Select grep JSON",
-            filetypes=[("JSON files", "*.json")],
+            title=self.ctx.labels["dialog_select_grep_json_title"],
+            filetypes=[(self.ctx.labels["filetype_json"], "*.json")],
         )
         if not json_path:
             return
 
         out_path = filedialog.asksaveasfilename(
-            title="Save HTML report",
+            title=self.ctx.labels["dialog_save_html_title"],
             defaultextension=".html",
-            filetypes=[("HTML files", "*.html")],
+            filetypes=[(self.ctx.labels["filetype_html"], "*.html")],
         )
         if not out_path:
             return
 
-        generate_grep_html_report(Path(json_path), Path(out_path))
-        messagebox.showinfo("レポート", f"HTMLレポートを出力しました。\n{out_path}")
+        generate_grep_html_report(
+            Path(json_path),
+            Path(out_path),
+            self.ctx.labels,
+        )
+
 
 # =========================================================
-# Diff Tab
+# Diff Tab（DiffResult 対応）
 # =========================================================
 class DiffTab(BaseTab):
     def __init__(self, app):
         super().__init__(app, app.ctx.labels["section_diff"])
+        self.file_a = None
+        self.file_b = None
+        self.range_a = None
+        self.range_b = None
+        self.diff_base = None
+        self.var_formula = None
+        self.var_ctx = None
+        self.var_shapes = None
+        self.sheet_mode = None
+        self.report_btn = None
+        self._last_result: DiffResult | None = None
         self.build()
 
     def build(self):
         self.tab.grid_columnconfigure(0, weight=1)
 
-        # --- files ---
-        files = ttk.LabelFrame(self.tab, text="ファイル")
+        files = ttk.LabelFrame(self.tab, text=self.ctx.labels["diff_group_files"])
         files.grid(row=0, column=0, sticky="we", padx=4, pady=4)
         files.grid_columnconfigure(1, weight=1)
 
@@ -440,100 +475,149 @@ class DiffTab(BaseTab):
         self.file_a.insert(0, self.ctx.user_paths.get("diff_file_a", ""))
 
         ttk.Button(
-            files, text="...", width=3,
+            files,
+            text=self.ctx.labels["button_ellipsis"],
+            width=3,
             command=lambda: self.app.choose_file(self.file_a, "diff_file_a"),
         ).grid(row=0, column=2, padx=(0, 4))
 
-        ttk.Label(files, text=self.ctx.labels["label_diff_file_b"]).grid(row=1, column=0, sticky="w", pady=(4, 0))
+        ttk.Label(files, text=self.ctx.labels["label_diff_file_b"]).grid(row=1, column=0, sticky="w")
         self.file_b = tk.Entry(files, width=70)
-        self.file_b.grid(row=1, column=1, sticky="we", padx=4, pady=(4, 0))
+        self.file_b.grid(row=1, column=1, sticky="we", padx=4)
         self.file_b.insert(0, self.ctx.user_paths.get("diff_file_b", ""))
 
         ttk.Button(
-            files, text="...", width=3,
+            files,
+            text=self.ctx.labels["button_ellipsis"],
+            width=3,
             command=lambda: self.app.choose_file(self.file_b, "diff_file_b"),
-        ).grid(row=1, column=2, padx=(0, 4), pady=(4, 0))
+        ).grid(row=1, column=2, padx=(0, 4))
 
-        # --- middle ---
         mid = ttk.Frame(self.tab)
         mid.grid(row=1, column=0, sticky="we", padx=4, pady=4)
         mid.grid_columnconfigure(0, weight=1)
         mid.grid_columnconfigure(1, weight=1)
 
-        # --- range ---
-        rng = ttk.LabelFrame(mid, text="比較範囲（必須）")
+        rng = ttk.LabelFrame(mid, text=self.ctx.labels["diff_group_range_required"])
         rng.grid(row=0, column=0, sticky="we", padx=(0, 4))
-        rng.grid_columnconfigure(1, weight=1)
 
-        ttk.Label(rng, text="範囲 A").grid(row=0, column=0, sticky="w")
+        ttk.Label(rng, text=self.ctx.labels["diff_label_range_a"]).grid(row=0, column=0, sticky="w")
         self.range_a = tk.Entry(rng, width=20)
         self.range_a.grid(row=0, column=1, sticky="w", padx=4)
-        self.range_a.insert(0, self.ctx.user_paths.get("diff_range_a", ""))
 
-        ttk.Label(rng, text="範囲 B").grid(row=1, column=0, sticky="w", pady=(4, 0))
+        ttk.Label(rng, text=self.ctx.labels["diff_label_range_b"]).grid(row=1, column=0, sticky="w")
         self.range_b = tk.Entry(rng, width=20)
-        self.range_b.grid(row=1, column=1, sticky="w", padx=4, pady=(4, 0))
-        self.range_b.insert(0, self.ctx.user_paths.get("diff_range_b", ""))
+        self.range_b.grid(row=1, column=1, sticky="w", padx=4)
 
-        # --- base ---
-        base = ttk.LabelFrame(mid, text="差分ベース（どちらをDIFFにするか）")
+        base = ttk.LabelFrame(mid, text=self.ctx.labels["diff_group_base"])
         base.grid(row=0, column=1, sticky="we", padx=(4, 0))
-        self.diff_base = tk.StringVar(value=self.ctx.user_paths.get("diff_base_file", "B"))
+
+        self.diff_base = tk.StringVar(value="B")
+        ttk.Radiobutton(
+            base,
+            text=self.ctx.labels["diff_radio_base_b_default"],
+            variable=self.diff_base,
+            value="B",
+        ).pack(anchor="w")
 
         ttk.Radiobutton(
-            base, text="比較先（B）をベース（既定）",
-            variable=self.diff_base, value="B"
-        ).pack(anchor="w", padx=6, pady=(2, 0))
+            base,
+            text=self.ctx.labels["diff_radio_base_a"],
+            variable=self.diff_base,
+            value="A",
+        ).pack(anchor="w")
 
-        ttk.Radiobutton(
-            base, text="比較元（A）をベース",
-            variable=self.diff_base, value="A"
-        ).pack(anchor="w", padx=6, pady=(2, 6))
-
-        # --- options ---
-        opt = ttk.LabelFrame(self.tab, text="オプション")
+        opt = ttk.LabelFrame(self.tab, text=self.ctx.labels["diff_group_options"])
         opt.grid(row=2, column=0, sticky="we", padx=4, pady=4)
 
-        self.var_formula = tk.BooleanVar(value=bool(self.ctx.user_paths.get("diff_compare_formula", False)))
-        self.var_ctx = tk.BooleanVar(value=bool(self.ctx.user_paths.get("diff_include_context", True)))
-        self.var_shapes = tk.BooleanVar(value=bool(self.ctx.user_paths.get("diff_compare_shapes", False)))
+        self.var_formula = tk.BooleanVar()
+        self.var_ctx = tk.BooleanVar(value=True)
+        self.var_shapes = tk.BooleanVar()
 
-        ttk.Checkbutton(opt, text="数式比較", variable=self.var_formula).pack(side="left", padx=6, pady=6)
-        ttk.Checkbutton(opt, text="ジャンプリンク/コンテキスト", variable=self.var_ctx).pack(side="left", padx=6, pady=6)
-        ttk.Checkbutton(opt, text="図形/画像も比較", variable=self.var_shapes).pack(side="left", padx=6, pady=6)
+        ttk.Checkbutton(opt, text=self.ctx.labels["check_compare_formula"], variable=self.var_formula).pack(side="left")
+        ttk.Checkbutton(opt, text=self.ctx.labels["check_diff_include_context"], variable=self.var_ctx).pack(side="left")
+        ttk.Checkbutton(opt, text=self.ctx.labels["check_diff_compare_shapes"], variable=self.var_shapes).pack(side="left")
 
-        # --- sheet mode ---
-        sheet = ttk.LabelFrame(self.tab, text="シート比較モード")
+        sheet = ttk.LabelFrame(self.tab, text=self.ctx.labels["diff_group_sheet_mode"])
         sheet.grid(row=3, column=0, sticky="we", padx=4, pady=4)
 
-        self.sheet_mode = tk.StringVar(
-            value=self.ctx.user_paths.get("diff_sheet_mode", "index")
-        )
-
+        self.sheet_mode = tk.StringVar(value="index")
         ttk.Radiobutton(
             sheet,
-            text="インデックス一致（Sheet1 ↔ Sheet1）【既定】",
+            text=self.ctx.labels["diff_radio_sheet_index_default"],
             variable=self.sheet_mode,
             value="index",
-        ).pack(anchor="w", padx=6, pady=(2, 0))
+        ).pack(anchor="w")
 
         ttk.Radiobutton(
             sheet,
-            text="シート名一致（同名シートのみ）",
+            text=self.ctx.labels["diff_radio_sheet_name"],
             variable=self.sheet_mode,
             value="name",
-        ).pack(anchor="w", padx=6, pady=(2, 6))
+        ).pack(anchor="w")
 
-        # --- buttons ---
         btns = ttk.Frame(self.tab)
         btns.grid(row=4, column=0, sticky="we", padx=4, pady=(4, 0))
         btns.grid_columnconfigure(0, weight=1)
 
-        self.report_btn = ttk.Button(btns, text="HTMLレポート", command=self.make_report)
+        self.report_btn = ttk.Button(
+            btns,
+            text=self.ctx.labels["button_html_report"],
+            command=self.make_report,
+        )
         self.report_btn.grid(row=0, column=0, sticky="w", padx=6, pady=6)
 
-        ttk.Button(btns, text="差分を作成", command=self.run).grid(
-            row=0, column=1, sticky="e", padx=6, pady=6
+        ttk.Button(
+            btns,
+            text=self.ctx.labels["button_diff_make"],
+            command=self.run,
+        ).grid(row=0, column=1, sticky="e", padx=6, pady=6)
+
+    def _run_impl(self):
+        req = DiffRequest(
+            file_a=self.file_a.get().strip(),
+            file_b=self.file_b.get().strip(),
+            range_a=self.range_a.get().strip(),
+            range_b=self.range_b.get().strip(),
+            base_file=self.diff_base.get(),
+            compare_formula=self.var_formula.get(),
+            include_context=self.var_ctx.get(),
+            compare_shapes=self.var_shapes.get(),
+            sheet_mode=self.sheet_mode.get(),
+        )
+
+        result: DiffResult = run_diff(req, self.ctx, self.logger, self.log)
+        self._last_result = result
+
+        self.log(f"[OK] Diff file: {result.diff_path}")
+        self.log(f"[OK] Diff JSON: {result.json_path}")
+
+    def make_report(self):
+        if not self._last_result:
+            messagebox.showwarning(
+                self.ctx.labels["msg_report_title"],
+                self.ctx.labels["msg_diff_not_executed"],
+            )
+            return
+
+        out_path = filedialog.asksaveasfilename(
+            title=self.ctx.labels["dialog_save_html_title"],
+            defaultextension=".html",
+            filetypes=[(self.ctx.labels["filetype_html"], "*.html")],
+        )
+        if not out_path:
+            return
+
+        generate_html_report(
+            Path(self._last_result.json_path),
+            Path(out_path),
+            self.ctx.labels,
+        )
+
+        self.log(f"[OK] HTML report: {out_path}")
+        messagebox.showinfo(
+            self.ctx.labels["msg_report_title"],
+            self.ctx.labels["msg_report_done_html"].format(path=out_path),
         )
 
     # -------------------------------------------------
@@ -579,8 +663,8 @@ class DiffTab(BaseTab):
         self.log("[UI] select diff json")
 
         json_path = filedialog.askopenfilename(
-            title="Select diff JSON",
-            filetypes=[("JSON files", "*.json")],
+            title=self.ctx.labels["dialog_select_diff_json_title"],
+            filetypes=[(self.ctx.labels["filetype_json"], "*.json")],
         )
         if not json_path:
             self.log("[UI] canceled (json)")
@@ -589,53 +673,66 @@ class DiffTab(BaseTab):
         self.log("[UI] select output html")
 
         out_path = filedialog.asksaveasfilename(
-            title="Save HTML report",
+            title=self.ctx.labels["dialog_save_html_title"],
             defaultextension=".html",
-            filetypes=[("HTML files", "*.html")],
+            filetypes=[(self.ctx.labels["filetype_html"], "*.html")],
         )
         if not out_path:
             self.log("[UI] canceled (html)")
             return
 
-        generate_html_report(Path(json_path), Path(out_path))
+        generate_html_report(
+            Path(json_path),
+            Path(out_path),
+            self.ctx.labels,
+        )
         self.log(f"[OK] HTMLレポート: {out_path}")
-        messagebox.showinfo("レポート", f"HTMLレポートを出力しました。\n{out_path}")
+        messagebox.showinfo(
+            self.ctx.labels["msg_report_title"],
+            self.ctx.labels["msg_report_done_html"].format(path=out_path),
+        )
+
 
 # =========================================================
 # Count Tab
 # =========================================================
 class CountTab(BaseTab):
     def __init__(self, app):
-        super().__init__(app, "Count")
+        super().__init__(app, app.ctx.labels["section_count"])
+        self.files = None
+        self.sheet = None
+        self.start = None
+        self.dir = None
+        self.tol = None
         self.build()
 
     def build(self):
-        frm = ttk.LabelFrame(self.tab, text="Count")
+        frm = ttk.LabelFrame(self.tab, text=self.ctx.labels["count_group"])
         frm.grid(row=0, column=0, sticky="we", padx=4, pady=4)
         frm.grid_columnconfigure(1, weight=1)
 
-        ttk.Label(frm, text="対象Excel").grid(row=0, column=0, sticky="w")
+        ttk.Label(frm, text=self.ctx.labels["label_count_files"]).grid(row=0, column=0, sticky="w")
         self.files = tk.Entry(frm, width=70)
         self.files.grid(row=0, column=1, sticky="we", padx=4)
         self.files.insert(0, self.ctx.user_paths.get("count_files", ""))
 
         ttk.Button(
             frm,
-            text="...",
+            text=self.ctx.labels["button_ellipsis"],
             width=3,
             command=lambda: self.app.choose_files(
                 self.files,
                 "count_files",
-                [("Excel", "*.xlsx;*.xlsm;*.xlsb;*.xls")],
+                [(self.ctx.labels["filetype_excel"], "*.xlsx;*.xlsm;*.xlsb;*.xls")],
             ),
         ).grid(row=0, column=2, padx=(0, 4))
 
-        ttk.Label(frm, text="シート名（空=先頭）").grid(row=1, column=0, sticky="w")
+        ttk.Label(frm, text=self.ctx.labels["label_count_sheet"]).grid(row=1, column=0, sticky="w")
         self.sheet = tk.Entry(frm, width=30)
         self.sheet.grid(row=1, column=1, sticky="w", padx=4)
         self.sheet.insert(0, self.ctx.user_paths.get("count_sheet", ""))
 
-        ttk.Label(frm, text="開始セル").grid(row=2, column=0, sticky="w")
+        ttk.Label(frm, text=self.ctx.labels["label_count_start"]).grid(row=2, column=0, sticky="w")
         self.start = tk.Entry(frm, width=12)
         self.start.grid(row=2, column=1, sticky="w", padx=4)
         self.start.insert(0, self.ctx.user_paths.get("count_start", "B2"))
@@ -643,15 +740,15 @@ class CountTab(BaseTab):
         self.dir = tk.StringVar(value=self.ctx.user_paths.get("count_dir", "row"))
         dfrm = ttk.Frame(frm)
         dfrm.grid(row=3, column=1, sticky="w", padx=4)
-        ttk.Radiobutton(dfrm, text="行方向", variable=self.dir, value="row").pack(side="left")
-        ttk.Radiobutton(dfrm, text="列方向", variable=self.dir, value="col").pack(side="left", padx=(12, 0))
+        ttk.Radiobutton(dfrm, text=self.ctx.labels["radio_count_dir_row"], variable=self.dir, value="row").pack(side="left")
+        ttk.Radiobutton(dfrm, text=self.ctx.labels["radio_count_dir_col"], variable=self.dir, value="col").pack(side="left", padx=(12, 0))
 
-        ttk.Label(frm, text="許容空白数").grid(row=4, column=0, sticky="w")
+        ttk.Label(frm, text=self.ctx.labels["label_count_tolerate_blanks"]).grid(row=4, column=0, sticky="w")
         self.tol = tk.Spinbox(frm, from_=0, to=1000, width=6)
         self.tol.grid(row=4, column=1, sticky="w", padx=4)
         self.tol.insert(0, str(self.ctx.user_paths.get("count_tolerate_blanks", 0)))
 
-        ttk.Button(self.tab, text="実行", command=self.run).grid(
+        ttk.Button(self.tab, text=self.ctx.labels["button_run"], command=self.run).grid(
             row=0, column=1, sticky="ne", padx=6, pady=6
         )
 
@@ -680,9 +777,15 @@ class CountTab(BaseTab):
 # =========================================================
 class ExcelViewerTab(BaseTab):
     def __init__(self, app):
-        super().__init__(app, "Excel")
+        super().__init__(app, app.ctx.labels["section_excel"])
         self.left_service = ExcelViewService(logger=self.logger)
         self.right_service = ExcelViewService(logger=self.logger)
+        self.left_book = None
+        self.left_sheet = None
+        self.left_canvas = None
+        self.right_book = None
+        self.right_sheet = None
+        self.right_canvas = None
         self.build()
 
     def _run_impl(self):
@@ -704,22 +807,22 @@ class ExcelViewerTab(BaseTab):
         frm.rowconfigure(1, weight=1)
         frm.columnconfigure(0, weight=1)
 
-        title = "左" if is_left else "右"
+        title = self.ctx.labels["viewer_left"] if is_left else self.ctx.labels["viewer_right"]
         lf = ttk.LabelFrame(frm, text=title)
         lf.grid(row=0, column=0, sticky="we")
         lf.columnconfigure(1, weight=1)
 
-        ttk.Label(lf, text="ブック").grid(row=0, column=0, sticky="w")
+        ttk.Label(lf, text=self.ctx.labels["viewer_label_book"]).grid(row=0, column=0, sticky="w")
         cmb_book = ttk.Combobox(lf, state="readonly", width=60)
         cmb_book.grid(row=0, column=1, sticky="we", padx=4)
 
         ttk.Button(
             lf,
-            text="追加...",
+            text=self.ctx.labels["viewer_button_add"],
             command=lambda side=is_left: self._add_books(side),
         ).grid(row=0, column=2, padx=(0, 4))
 
-        ttk.Label(lf, text="シート").grid(row=1, column=0, sticky="w", pady=(4, 0))
+        ttk.Label(lf, text=self.ctx.labels["viewer_label_sheet"]).grid(row=1, column=0, sticky="w", pady=(4, 0))
         cmb_sheet = ttk.Combobox(lf, state="readonly", width=40)
         cmb_sheet.grid(row=1, column=1, sticky="w", padx=4, pady=(4, 0))
 
@@ -742,7 +845,7 @@ class ExcelViewerTab(BaseTab):
     def _add_books(self, is_left: bool):
         paths = filedialog.askopenfilenames(
             initialdir=self.ctx.default_dir_for(""),
-            filetypes=[("Excel", "*.xlsx;*.xlsm;*.xlsb;*.xls")],
+            filetypes=[(self.ctx.labels["filetype_excel"], "*.xlsx;*.xlsm;*.xlsb;*.xls")],
         )
         if not paths:
             return
@@ -792,15 +895,6 @@ class ExcelViewerTab(BaseTab):
         svc.select_sheet(s)
         canvas.refresh()
 
-# ui/app.py
-import tkinter as tk
-from tkinter import ttk, filedialog
-
-
-# ui/app.py
-import tkinter as tk
-from tkinter import ttk, filedialog
-
 
 # =========================================================
 # App
@@ -835,7 +929,7 @@ class ExcelApp:
         # ----------------------------------------
         log_frame = ttk.Frame(self.root)
         log_frame.pack(fill="both", expand=False, padx=4, pady=(2, 4))
-        ttk.Label(log_frame, text="ログ").pack(anchor="w")
+        ttk.Label(log_frame, text=self.ctx.labels["label_log"]).pack(anchor="w")
         self.log = tk.Text(log_frame, height=8)
         self.log.pack(fill="both", expand=True)
 
@@ -850,22 +944,66 @@ class ExcelApp:
         # -------------------------------
         license_menu = tk.Menu(menubar, tearoff=0)
         license_menu.add_command(
-            label="Third Party Licenses",
+            label=self.ctx.labels["menu_third_party_licenses"],
             command=self._show_third_party_licenses,
         )
-        menubar.add_cascade(label="License", menu=license_menu)
+        menubar.add_cascade(
+            label=self.ctx.labels["menu_license"],
+            menu=license_menu,
+        )
 
+        # -------------------------------
+        # Language
+        # -------------------------------
+        lang_menu = tk.Menu(menubar, tearoff=0)
+        for lang in ("ja", "en"):
+            lang_menu.add_command(
+                label=lang.upper(),
+                command=lambda l=lang: self._change_language(l),
+            )
+        menubar.add_cascade(label="Language", menu=lang_menu)
+        
         # -------------------------------
         # About
         # -------------------------------
         about_menu = tk.Menu(menubar, tearoff=0)
         about_menu.add_command(
-            label="About",
+            label=self.ctx.labels["menu_about"],
             command=self._show_about,
         )
-        menubar.add_cascade(label="About", menu=about_menu)
+        menubar.add_cascade(
+            label=self.ctx.labels["menu_about"],
+            menu=about_menu,
+        )
 
         self.root.config(menu=menubar)
+
+    # =====================================================
+    # Language
+    # =====================================================
+    def _change_language(self, lang: str):
+        cur = getattr(self.ctx, "lang", "ja")
+        if cur == lang:
+            return
+
+        self.logger.info(
+            f"[UI] language change requested: {cur} -> {lang} (apply on next start)"
+        )
+
+        # 保存のみ（即時反映しない）
+        self.ctx.lang = lang
+        self.ctx.save_user_path("app_lang", lang)
+
+        # ユーザー通知（ログのみ）
+        self.append_log(
+            self.ctx.labels["msg_language_apply_next_start"].format(lang=lang)
+        )
+
+    def _restart_app(self):
+        self.logger.info("[UI] restart app for language change")
+        self.root.destroy()
+        new_app = ExcelApp(self.ctx, self.logger)
+        new_app.run()
 
     # =====================================================
     # License
@@ -875,24 +1013,17 @@ class ExcelApp:
 
         text_data = getattr(self.ctx, "third_party_licenses_text", None)
         if not text_data:
-            self.logger.error(
-                "[UI] third_party_licenses_text is missing"
-            )
-            raise RuntimeError(
-                "third_party_licenses_text is not loaded"
-            )
+            raise RuntimeError("third_party_licenses_text is not loaded")
 
         win = tk.Toplevel(self.root)
-        win.title("Third Party Licenses")
-        win.geometry("900x700")
+        win.title(self.ctx.labels["menu_third_party_licenses"])
+        win.geometry(self.ctx.labels["window_third_party_licenses_geometry"])
 
         txt = tk.Text(win, wrap="word")
         txt.insert("1.0", text_data)
         txt.config(state="disabled")
 
-        yscroll = ttk.Scrollbar(
-            win, orient="vertical", command=txt.yview
-        )
+        yscroll = ttk.Scrollbar(win, orient="vertical", command=txt.yview)
         txt.config(yscrollcommand=yscroll.set)
 
         txt.pack(side="left", fill="both", expand=True)
@@ -905,8 +1036,8 @@ class ExcelApp:
         self.logger.info("[UI] open About")
 
         win = tk.Toplevel(self.root)
-        win.title("About")
-        win.geometry("400x250")
+        win.title(self.ctx.labels["about_title"])
+        win.geometry(self.ctx.labels["window_about_geometry"])
         win.resizable(False, False)
 
         frame = ttk.Frame(win, padding=20)
@@ -920,12 +1051,14 @@ class ExcelApp:
 
         ttk.Label(
             frame,
-            text=f"Version: {self.ctx.app_version}",
+            text=self.ctx.labels["about_version"].format(
+                version=self.ctx.app_version
+            ),
         ).pack(anchor="w")
 
         ttk.Label(
             frame,
-            text="© 2026 Your Company / Your Name",
+            text=self.ctx.labels["about_copyright"],
         ).pack(anchor="w", pady=(10, 0))
 
     # =====================================================
@@ -944,7 +1077,7 @@ class ExcelApp:
 
     def choose_file(self, entry, key):
         path = filedialog.askopenfilename(
-            filetypes=[("Excel", "*.xlsx;*.xlsm;*.xlsb;*.xls")]
+            filetypes=[(self.ctx.labels["filetype_excel"], "*.xlsx;*.xlsm;*.xlsb;*.xls")]
         )
         if path:
             entry.delete(0, tk.END)
@@ -962,13 +1095,13 @@ class ExcelApp:
         self.root.mainloop()
 
     # -----------------------------------------
-    # Progress control（追加）
+    # Progress control
     # -----------------------------------------
     def show_progress(self, message: str):
         if self._progress:
             return
         self.nb.state(["disabled"])
-        self._progress = ProgressDialog(self.root, message)
+        self._progress = ProgressDialog(self.root, self.ctx, message)
 
     def hide_progress(self):
         if self._progress:

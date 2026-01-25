@@ -40,7 +40,7 @@ class TransferCsvBuilderDialog(tk.Toplevel):
         self.src_service = ExcelViewService(logger=self.logger)
         self.dst_service = ExcelViewService(logger=self.logger)
 
-        self.title("転記CSV作成")
+        self.title(self.ctx.labels["transfer_builder_title"])
         self.geometry("1500x850")
 
         self._build()
@@ -67,7 +67,7 @@ class TransferCsvBuilderDialog(tk.Toplevel):
         root.rowconfigure(2, weight=1)
 
         # ---- 候補 ----
-        cand = ttk.LabelFrame(root, text="マッピング候補")
+        cand = ttk.LabelFrame(root, text=self.ctx.labels["transfer_builder_group_candidate"])
         cand.grid(row=0, column=0, columnspan=2, sticky="we")
         self.cand_var = tk.StringVar()
         ttk.Entry(cand, textvariable=self.cand_var, state="readonly").pack(
@@ -75,7 +75,7 @@ class TransferCsvBuilderDialog(tk.Toplevel):
         )
 
         # ---- 確定テーブル ----
-        conf = ttk.LabelFrame(root, text="確定済み（CSV内容）")
+        conf = ttk.LabelFrame(root, text=self.ctx.labels["transfer_builder_group_confirmed"])
         conf.grid(row=1, column=0, columnspan=2, sticky="nsew")
         conf.rowconfigure(0, weight=1)
         conf.columnconfigure(0, weight=1)
@@ -113,9 +113,9 @@ class TransferCsvBuilderDialog(tk.Toplevel):
 
         btns = ttk.Frame(conf)
         btns.grid(row=1, column=0, sticky="we", pady=4)
-        ttk.Button(btns, text="確定", command=self.confirm).pack(side="left")
-        ttk.Button(btns, text="削除", command=self.remove).pack(side="left", padx=6)
-        ttk.Button(btns, text="CSVを作成...", command=self.create_csv).pack(side="right")
+        ttk.Button(btns, text=self.ctx.labels["transfer_builder_btn_confirm"], command=self.confirm).pack(side="left")
+        ttk.Button(btns, text=self.ctx.labels["transfer_builder_btn_remove"], command=self.remove).pack(side="left", padx=6)
+        ttk.Button(btns, text=self.ctx.labels["transfer_builder_btn_create_csv"], command=self.create_csv).pack(side="right")
 
         # ---- Excel 表（左右）----
         paned = ttk.Panedwindow(root, orient="horizontal")
@@ -133,22 +133,26 @@ class TransferCsvBuilderDialog(tk.Toplevel):
         frm.rowconfigure(1, weight=1)
         frm.columnconfigure(0, weight=1)
 
-        title = "ファイルA（転記元）" if is_src else "ファイルB（転記先）"
+        title = (
+            self.ctx.labels["transfer_builder_file_src"]
+            if is_src else
+            self.ctx.labels["transfer_builder_file_dst"]
+        )
         lf = ttk.LabelFrame(frm, text=title)
         lf.grid(row=0, column=0, sticky="we")
         lf.columnconfigure(1, weight=1)
 
-        ttk.Label(lf, text="ブック").grid(row=0, column=0, sticky="w")
+        ttk.Label(lf, text=self.ctx.labels["transfer_builder_label_book"]).grid(row=0, column=0, sticky="w")
         cmb_book = ttk.Combobox(lf, state="readonly", width=60)
         cmb_book.grid(row=0, column=1, sticky="we", padx=4)
 
         ttk.Button(
             lf,
-            text="追加...",
+            text=self.ctx.labels["transfer_builder_btn_add"],
             command=lambda s=is_src: self._choose_books(s)
         ).grid(row=0, column=2, padx=(0, 4))
 
-        ttk.Label(lf, text="シート").grid(row=1, column=0, sticky="w", pady=(4, 0))
+        ttk.Label(lf, text=self.ctx.labels["transfer_builder_label_sheet"]).grid(row=1, column=0, sticky="w", pady=(4, 0))
         cmb_sheet = ttk.Combobox(lf, state="readonly", width=40)
         cmb_sheet.grid(row=1, column=1, sticky="w", padx=4, pady=(4, 0))
 
@@ -262,15 +266,20 @@ class TransferCsvBuilderDialog(tk.Toplevel):
             names = self._cell_name(self.src_cells)
             s_txt = f"{names[0]}〜{names[-1]} ({sc})"
         else:
-            s_txt = "(未選択)"
+            s_txt = self.ctx.labels["transfer_builder_candidate_none"]
 
         if dc:
             names = self._cell_name(self.dst_cells)
             d_txt = f"{names[0]}〜{names[-1]} ({dc})"
         else:
-            d_txt = "(未選択)"
+            d_txt = self.ctx.labels["transfer_builder_candidate_none"]
 
-        self.cand_var.set(f"A: {s_txt}  →  B: {d_txt}")
+        self.cand_var.set(
+            self.ctx.labels["transfer_builder_candidate_format"].format(
+                src=s_txt,
+                dst=d_txt,
+            )
+        )
 
     def _cell_name(self, cells: Set[Tuple[int, int]]) -> List[str]:
         return [
@@ -300,7 +309,10 @@ class TransferCsvBuilderDialog(tk.Toplevel):
         elif len(dst) == 1:
             pairs = [(s, dst[0]) for s in src]
         else:
-            messagebox.showerror("転記", "セル数が一致しません")
+            messagebox.showerror(
+                self.ctx.labels["transfer_builder_error_title"],
+                self.ctx.labels["transfer_builder_error_cell_mismatch"],
+            )
             self._restore_focus()
             return
 

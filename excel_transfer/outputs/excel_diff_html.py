@@ -33,8 +33,9 @@ logger = get_logger("excel_diff_html")
 # HTML Builder
 # =========================================================
 class ExcelDiffHtmlReport:
-    def __init__(self, diff_data: Dict[str, Any]):
+    def __init__(self, diff_data: Dict[str, Any], labels: Dict[str, str]):
         self.data = diff_data
+        self.labels = labels
 
     # -----------------------------------------------------
     # Public
@@ -56,27 +57,29 @@ class ExcelDiffHtmlReport:
     # -----------------------------------------------------
     def _build_meta(self) -> str:
         meta = self.data.get("meta", {})
+        L = self.labels
         return f"""
-<h2>Compare Meta</h2>
+<h2>{L["diff_html_meta_title"]}</h2>
 <table class="meta">
-<tr><th>File A</th><td>{html.escape(meta.get("file_a",""))}</td></tr>
-<tr><th>File B</th><td>{html.escape(meta.get("file_b",""))}</td></tr>
-<tr><th>Range A</th><td>{meta.get("range_a","")}</td></tr>
-<tr><th>Range B</th><td>{meta.get("range_b","")}</td></tr>
-<tr><th>Base File</th><td>{meta.get("base_file","")}</td></tr>
-<tr><th>Compare Formula</th><td>{meta.get("compare_formula")}</td></tr>
-<tr><th>Compare Shapes</th><td>{meta.get("compare_shapes")}</td></tr>
+<tr><th>{L["diff_html_meta_file_a"]}</th><td>{html.escape(meta.get("file_a",""))}</td></tr>
+<tr><th>{L["diff_html_meta_file_b"]}</th><td>{html.escape(meta.get("file_b",""))}</td></tr>
+<tr><th>{L["diff_html_meta_range_a"]}</th><td>{meta.get("range_a","")}</td></tr>
+<tr><th>{L["diff_html_meta_range_b"]}</th><td>{meta.get("range_b","")}</td></tr>
+<tr><th>{L["diff_html_meta_base_file"]}</th><td>{meta.get("base_file","")}</td></tr>
+<tr><th>{L["diff_html_meta_compare_formula"]}</th><td>{meta.get("compare_formula")}</td></tr>
+<tr><th>{L["diff_html_meta_compare_shapes"]}</th><td>{meta.get("compare_shapes")}</td></tr>
 </table>
 """
 
     def _build_summary(self) -> str:
         s = self.data.get("summary", {})
+        L = self.labels
         return f"""
-<h2>Summary</h2>
+<h2>{L["diff_html_summary_title"]}</h2>
 <ul>
-<li>Cell Modified: {s.get("cell_mod_count",0)}</li>
-<li>Shape Diff: {s.get("shape_diff_count",0)}</li>
-<li>Base File: {s.get("base_file","")}</li>
+<li>{L["diff_html_summary_cell_mod"]}: {s.get("cell_mod_count",0)}</li>
+<li>{L["diff_html_summary_shape_diff"]}: {s.get("shape_diff_count",0)}</li>
+<li>{L["diff_html_summary_base_file"]}: {s.get("base_file","")}</li>
 </ul>
 """
 
@@ -85,6 +88,7 @@ class ExcelDiffHtmlReport:
     # -----------------------------------------------------
     def _build_cell_diff(self) -> str:
         rows: List[str] = []
+        L = self.labels
 
         for idx, d in enumerate(self.data.get("diff_cells", []), start=1):
             try:
@@ -112,30 +116,31 @@ class ExcelDiffHtmlReport:
                 f"</tr>"
             )
 
-        body = "\n".join(rows) if rows else "<tr><td colspan='8'>No diff</td></tr>"
+        body = "\n".join(rows) if rows else f"<tr><td colspan='8'>{L['diff_html_cell_none']}</td></tr>"
 
         return f"""
-<h2>Cell Differences</h2>
+<h2>{L["diff_html_cell_title"]}</h2>
 <table class="diff">
 <tr>
-  <th>No</th>
-  <th>Sheet</th>
-  <th>Row</th>
-  <th>Col</th>
-  <th>Type</th>
-  <th>Value A</th>
-  <th>Value B</th>
-  <th>Base</th>
+  <th>{L["diff_html_cell_no"]}</th>
+  <th>{L["diff_html_cell_sheet"]}</th>
+  <th>{L["diff_html_cell_row"]}</th>
+  <th>{L["diff_html_cell_col"]}</th>
+  <th>{L["diff_html_cell_type"]}</th>
+  <th>{L["diff_html_cell_value_a"]}</th>
+  <th>{L["diff_html_cell_value_b"]}</th>
+  <th>{L["diff_html_cell_base"]}</th>
 </tr>
 {body}
 </table>
 """
 
     # -----------------------------------------------------
-    # Shape Diff（ADD / DEL / GEOM / TEXT 対応）
+    # Shape Diff
     # -----------------------------------------------------
     def _build_shape_diff(self) -> str:
         rows: List[str] = []
+        L = self.labels
 
         for idx, d in enumerate(self.data.get("diff_shapes", []), start=1):
             t = d.get("type", "")
@@ -148,11 +153,9 @@ class ExcelDiffHtmlReport:
             if t == "SHAPE_GEOM":
                 detail_a = html.escape(json.dumps(d.get("a", {}), ensure_ascii=False))
                 detail_b = html.escape(json.dumps(d.get("b", {}), ensure_ascii=False))
-
             elif t == "SHAPE_TEXT":
                 detail_a = html.escape(d.get("text_a", ""))
                 detail_b = html.escape(d.get("text_b", ""))
-
             elif t in ("SHAPE_ADD", "SHAPE_DEL"):
                 detail_a = "-"
                 detail_b = "-"
@@ -168,18 +171,18 @@ class ExcelDiffHtmlReport:
                 f"</tr>"
             )
 
-        body = "\n".join(rows) if rows else "<tr><td colspan='6'>No shape diff</td></tr>"
+        body = "\n".join(rows) if rows else f"<tr><td colspan='6'>{L['diff_html_shape_none']}</td></tr>"
 
         return f"""
-<h2>Shape Differences</h2>
+<h2>{L["diff_html_shape_title"]}</h2>
 <table class="diff">
 <tr>
-  <th>No</th>
-  <th>Sheet</th>
-  <th>Name</th>
-  <th>Type</th>
-  <th>Detail A</th>
-  <th>Detail B</th>
+  <th>{L["diff_html_cell_no"]}</th>
+  <th>{L["diff_html_cell_sheet"]}</th>
+  <th>{L["diff_html_shape_name"]}</th>
+  <th>{L["diff_html_shape_type"]}</th>
+  <th>{L["diff_html_shape_detail_a"]}</th>
+  <th>{L["diff_html_shape_detail_b"]}</th>
 </tr>
 {body}
 </table>
@@ -189,31 +192,32 @@ class ExcelDiffHtmlReport:
     # HTML Frame
     # -----------------------------------------------------
     def _html_header(self) -> str:
-        return """
+        title = self.labels["diff_html_title"]
+        return f"""
 <!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8"/>
-<title>Excel Diff Report</title>
+<title>{title}</title>
 <style>
-body { font-family: Consolas, monospace; font-size: 13px; }
-table { border-collapse: collapse; margin-bottom: 20px; width: 100%; }
-th, td { border: 1px solid #aaa; padding: 4px 8px; vertical-align: top; }
-th { background: #eee; }
+body {{ font-family: Consolas, monospace; font-size: 13px; }}
+table {{ border-collapse: collapse; margin-bottom: 20px; width: 100%; }}
+th, td {{ border: 1px solid #aaa; padding: 4px 8px; vertical-align: top; }}
+th {{ background: #eee; }}
 
-.diff-mod { background: #fff3cd; }
-.diff-add { background: #d4edda; }
-.diff-del { background: #f8d7da; }
+.diff-mod {{ background: #fff3cd; }}
+.diff-add {{ background: #d4edda; }}
+.diff-del {{ background: #f8d7da; }}
 
-.diff-shape { background: #e2d6f3; }
-.diff-shape.diff-shape_geom { background: #f6d6d6; }
-.diff-shape.diff-shape_text { background: #fff0b3; }
+.diff-shape {{ background: #e2d6f3; }}
+.diff-shape.diff-shape_geom {{ background: #f6d6d6; }}
+.diff-shape.diff-shape_text {{ background: #fff0b3; }}
 
-.meta th { text-align: left; width: 160px; }
+.meta th {{ text-align: left; width: 160px; }}
 </style>
 </head>
 <body>
-<h1>Excel Diff Report</h1>
+<h1>{title}</h1>
 """
 
     def _html_footer(self) -> str:
@@ -226,12 +230,12 @@ th { background: #eee; }
 # =========================================================
 # Entry
 # =========================================================
-def generate_html_report(json_path: Path, out_path: Path) -> None:
+def generate_html_report(json_path: Path, out_path: Path, labels: Dict[str, str]) -> None:
     logger.info(f"[LOAD] {json_path}")
     with json_path.open("r", encoding="utf-8") as f:
         data = json.load(f)
 
-    report = ExcelDiffHtmlReport(data)
+    report = ExcelDiffHtmlReport(data, labels)
     html_text = report.build_html()
 
     logger.info(f"[WRITE] {out_path}")

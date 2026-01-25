@@ -33,8 +33,9 @@ logger = get_logger("excel_grep_html")
 # HTML Builder
 # =========================================================
 class ExcelGrepHtmlReport:
-    def __init__(self, grep_data: Dict[str, Any]):
+    def __init__(self, grep_data: Dict[str, Any], labels: Dict[str, str]):
         self.data = grep_data
+        self.labels = labels
 
     # -----------------------------------------------------
     # Public
@@ -55,6 +56,7 @@ class ExcelGrepHtmlReport:
     # -----------------------------------------------------
     def _build_meta(self) -> str:
         meta = self.data.get("meta", {}) or {}
+        L = self.labels
 
         def esc(v: Any) -> str:
             return html.escape("" if v is None else str(v))
@@ -64,21 +66,22 @@ class ExcelGrepHtmlReport:
         off_c = off[1] if len(off) > 1 else 0
 
         return f"""
-<h2>Grep Meta</h2>
+<h2>{L["grep_html_meta_title"]}</h2>
 <table class="meta">
-<tr><th>Keyword</th><td>{esc(meta.get("search_pattern"))}</td></tr>
-<tr><th>Use Regex</th><td>{esc(meta.get("use_regex"))}</td></tr>
-<tr><th>File Regex</th><td>{esc(meta.get("file_name_regex"))}</td></tr>
-<tr><th>Sheet Regex</th><td>{esc(meta.get("sheet_name_regex"))}</td></tr>
-<tr><th>Offset Row</th><td>{off_r}</td></tr>
-<tr><th>Offset Col</th><td>{off_c}</td></tr>
-<tr><th>Replace Pattern</th><td>{esc(meta.get("replace_pattern"))}</td></tr>
-<tr><th>Replace Mode</th><td>{esc(meta.get("replace_mode"))}</td></tr>
+<tr><th>{L["grep_html_meta_keyword"]}</th><td>{esc(meta.get("search_pattern"))}</td></tr>
+<tr><th>{L["grep_html_meta_use_regex"]}</th><td>{esc(meta.get("use_regex"))}</td></tr>
+<tr><th>{L["grep_html_meta_file_regex"]}</th><td>{esc(meta.get("file_name_regex"))}</td></tr>
+<tr><th>{L["grep_html_meta_sheet_regex"]}</th><td>{esc(meta.get("sheet_name_regex"))}</td></tr>
+<tr><th>{L["grep_html_meta_offset_row"]}</th><td>{off_r}</td></tr>
+<tr><th>{L["grep_html_meta_offset_col"]}</th><td>{off_c}</td></tr>
+<tr><th>{L["grep_html_meta_replace_pattern"]}</th><td>{esc(meta.get("replace_pattern"))}</td></tr>
+<tr><th>{L["grep_html_meta_replace_mode"]}</th><td>{esc(meta.get("replace_mode"))}</td></tr>
 </table>
 """
 
     def _build_summary(self) -> str:
         files = self.data.get("files", []) or []
+        L = self.labels
 
         file_cnt = 0
         sheet_cnt = 0
@@ -98,13 +101,13 @@ class ExcelGrepHtmlReport:
                         diff_cnt += 1
 
         return f"""
-<h2>Summary</h2>
+<h2>{L["grep_html_summary_title"]}</h2>
 <ul>
-<li>Files: {file_cnt}</li>
-<li>Sheets: {sheet_cnt}</li>
-<li>Hits: {hit_cnt}</li>
-<li>Checked: {checked_cnt}</li>
-<li>Diff (before != after): {diff_cnt}</li>
+<li>{L["grep_html_summary_files"]}: {file_cnt}</li>
+<li>{L["grep_html_summary_sheets"]}: {sheet_cnt}</li>
+<li>{L["grep_html_summary_hits"]}: {hit_cnt}</li>
+<li>{L["grep_html_summary_checked"]}: {checked_cnt}</li>
+<li>{L["grep_html_summary_diff"]}: {diff_cnt}</li>
 </ul>
 """
 
@@ -114,6 +117,7 @@ class ExcelGrepHtmlReport:
     def _build_results(self) -> str:
         rows: List[str] = []
         idx = 0
+        L = self.labels
 
         for f in self.data.get("files", []) or []:
             fpath = html.escape(str(f.get("path", "")))
@@ -154,20 +158,20 @@ class ExcelGrepHtmlReport:
                         f"</tr>"
                     )
 
-        body = "\n".join(rows) if rows else "<tr><td colspan='8'>No result</td></tr>"
+        body = "\n".join(rows) if rows else f"<tr><td colspan='8'>{L['grep_html_no_result']}</td></tr>"
 
         return f"""
-<h2>Results</h2>
+<h2>{L["grep_html_results_title"]}</h2>
 <table class="diff">
 <tr>
-  <th>No</th>
-  <th>File</th>
-  <th>Sheet</th>
-  <th>Hit</th>
-  <th>Target</th>
-  <th>Before</th>
-  <th>After</th>
-  <th>Checked</th>
+  <th>{L["grep_html_col_no"]}</th>
+  <th>{L["grep_html_col_file"]}</th>
+  <th>{L["grep_html_col_sheet"]}</th>
+  <th>{L["grep_html_col_hit"]}</th>
+  <th>{L["grep_html_col_target"]}</th>
+  <th>{L["grep_html_col_before"]}</th>
+  <th>{L["grep_html_col_after"]}</th>
+  <th>{L["grep_html_col_checked"]}</th>
 </tr>
 {body}
 </table>
@@ -177,30 +181,31 @@ class ExcelGrepHtmlReport:
     # HTML Frame
     # -----------------------------------------------------
     def _html_header(self) -> str:
-        return """
+        title = self.labels["grep_html_title"]
+        return f"""
 <!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8"/>
-<title>Excel Grep Report</title>
+<title>{title}</title>
 <style>
-body { font-family: Consolas, monospace; font-size: 13px; }
-table { border-collapse: collapse; margin-bottom: 20px; width: 100%; }
-th, td { border: 1px solid #aaa; padding: 4px 8px; vertical-align: top; }
-th { background: #eee; }
+body {{ font-family: Consolas, monospace; font-size: 13px; }}
+table {{ border-collapse: collapse; margin-bottom: 20px; width: 100%; }}
+th, td {{ border: 1px solid #aaa; padding: 4px 8px; vertical-align: top; }}
+th {{ background: #eee; }}
 
-.meta th { text-align: left; width: 180px; }
+.meta th {{ text-align: left; width: 180px; }}
 
-.mono { white-space: nowrap; }
-.pre { white-space: pre-wrap; word-break: break-word; }
-.center { text-align: center; }
+.mono {{ white-space: nowrap; }}
+.pre {{ white-space: pre-wrap; word-break: break-word; }}
+.center {{ text-align: center; }}
 
-.diff-yes { background: #fff3cd; }
-.diff-no  { background: #f8f9fa; }
+.diff-yes {{ background: #fff3cd; }}
+.diff-no  {{ background: #f8f9fa; }}
 </style>
 </head>
 <body>
-<h1>Excel Grep Report</h1>
+<h1>{title}</h1>
 """
 
     def _html_footer(self) -> str:
@@ -213,12 +218,12 @@ th { background: #eee; }
 # =========================================================
 # Entry
 # =========================================================
-def generate_grep_html_report(json_path: Path, out_path: Path) -> None:
+def generate_grep_html_report(json_path: Path, out_path: Path, labels: Dict[str, str]) -> None:
     logger.info(f"[LOAD] {json_path}")
     with json_path.open("r", encoding="utf-8") as f:
         data = json.load(f)
 
-    report = ExcelGrepHtmlReport(data)
+    report = ExcelGrepHtmlReport(data, labels)
     html_text = report.build_html()
 
     logger.info(f"[WRITE] {out_path}")

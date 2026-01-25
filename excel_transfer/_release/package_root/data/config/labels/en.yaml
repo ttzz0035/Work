@@ -1,0 +1,199 @@
+  app_title: "Offismith"
+
+  # tabs
+  section_excel: "SimpleViewer"
+  section_transfer: "Transfer"
+  section_grep: "Grep"
+  section_diff: "Diff"
+  section_count: "Count"
+
+  # common
+  label_log: "Log"
+  button_run: "Run"
+  button_ellipsis: "..."
+  button_html_report: "HTML Report"
+  msg_progress_running: "{name} running"
+  msg_report_title: "Report"
+  msg_report_done_html: "HTML report generated\n{path}"
+
+  # menu
+  menu_license: "License"
+  menu_about: "About"
+  menu_third_party_licenses: "Third Party Licenses"
+
+  # about
+  about_title: "About"
+  about_version: "Version {version}"
+  about_copyright: "© 2026 TAZU"
+
+  # transfer
+  transfer_group: "Transfer"
+  label_transfer_config: "Transfer CSV"
+  button_transfer_create: "Create"
+  check_transfer_skip_oor: "Skip out-of-range cells (warn only)"
+  msg_transfer_done: "Transfer completed: {note}"
+
+  # grep
+  grep_group: "Grep"
+  label_grep_root: "Search Folder"
+  label_grep_keyword: "Keyword"
+  check_ignore_case: "Ignore case"
+  check_grep_regex: "Regex"
+  label_grep_file_regex: "File name (regex)"
+  label_grep_sheet_regex: "Sheet (regex)"
+  label_grep_offset: "Post-hit offset"
+  label_grep_offset_row: "Row"
+  label_grep_offset_col: "Column"
+  check_grep_replace_enabled: "Replace"
+  label_grep_replace_mode: "Replace mode"
+  radio_grep_replace_preview: "Preview"
+  radio_grep_replace_auto: "Auto"
+  dialog_select_grep_json_title: "Select Grep JSON"
+  dialog_save_html_title: "Save HTML Report"
+
+  # diff
+  diff_group_files: "Files"
+  diff_group_range_required: "Compare range"
+  diff_label_range_a: "Range A"
+  diff_label_range_b: "Range B"
+  diff_group_base: "Base"
+  diff_radio_base_b_default: "Use B"
+  diff_radio_base_a: "Use A"
+  diff_group_options: "Options"
+  check_compare_formula: "Compare formulas"
+  check_diff_include_context: "Links / context"
+  check_diff_compare_shapes: "Include shapes/images"
+  diff_group_sheet_mode: "Sheet matching"
+  diff_radio_sheet_index_default: "Index match (default)"
+  diff_radio_sheet_name: "Name match"
+  button_diff_make: "Create Diff"
+  dialog_select_diff_json_title: "Select Diff JSON"
+
+  label_diff_file_a: "File A"
+  label_diff_file_b: "File B"
+  label_diff_key_cols: "Primary keys"
+
+  # count
+  count_group: "Count"
+  label_count_files: "Target Excel"
+  label_count_sheet: "Sheet (empty = first)"
+  label_count_start: "Start cell"
+  radio_count_dir_row: "Row"
+  radio_count_dir_col: "Column"
+  label_count_tolerate_blanks: "Allowed blanks"
+
+  # excel viewer
+  viewer_left: "Left"
+  viewer_right: "Right"
+  viewer_label_book: "Workbook"
+  viewer_button_add: "Add"
+  viewer_label_sheet: "Sheet"
+
+  # preview replace dialog
+  preview_title: "Replace Preview"
+
+  preview_col_checked: "✔"
+  preview_col_file: "File"
+  preview_col_sheet: "Sheet"
+  preview_col_hit: "Hit"
+  preview_col_target: "Target"
+  preview_col_before: "Before"
+  preview_col_replace: "Replace"
+
+  preview_btn_select_all: "Select All"
+  preview_btn_clear_all: "Clear"
+  preview_btn_cancel: "Cancel"
+  preview_btn_ok: "OK"
+
+  # progress
+  progress_title: "Processing"
+  progress_message_default: "Processing"
+
+  # transfer csv builder
+  transfer_builder_title: "Transfer CSV Builder"
+  transfer_builder_group_candidate: "Candidates"
+  transfer_builder_group_confirmed: "Confirmed"
+
+  transfer_builder_btn_confirm: "Confirm"
+  transfer_builder_btn_remove: "Remove"
+  transfer_builder_btn_create_csv: "Create CSV"
+
+  transfer_builder_file_src: "File A (Source)"
+  transfer_builder_file_dst: "File B (Destination)"
+
+  transfer_builder_label_book: "Workbook"
+  transfer_builder_label_sheet: "Sheet"
+  transfer_builder_btn_add: "Add"
+
+  transfer_builder_candidate_none: "None"
+  transfer_builder_candidate_format: "A: {src} → B: {dst}"
+
+  transfer_builder_error_title: "Transfer Error"
+  transfer_builder_error_cell_mismatch: "Cell count does not match"
+
+  # excel diff html
+  diff_html_title: "Excel Diff Report"
+
+  diff_html_meta_title: "Meta"
+  diff_html_meta_file_a: "File A"
+  diff_html_meta_file_b: "File B"
+  diff_html_meta_range_a: "Range A"
+  diff_html_meta_range_b: "Range B"
+  diff_html_meta_base_file: "Base"
+  diff_html_meta_compare_formula: "Formula"
+  diff_html_meta_compare_shapes: "Shapes"
+
+  diff_html_summary_title: "Summary"
+  diff_html_summary_cell_mod: "Cells"
+  diff_html_summary_shape_diff: "Shapes"
+  diff_html_summary_base_file: "Base"
+
+  diff_html_cell_title: "Cell Diff"
+  diff_html_cell_no: "No"
+  diff_html_cell_sheet: "Sheet"
+  diff_html_cell_row: "Row"
+  diff_html_cell_col: "Col"
+  diff_html_cell_type: "Type"
+  diff_html_cell_value_a: "A"
+  diff_html_cell_value_b: "B"
+  diff_html_cell_base: "Base"
+  diff_html_cell_none: "No diff"
+
+  diff_html_shape_title: "Shape Diff"
+  diff_html_shape_name: "Name"
+  diff_html_shape_type: "Type"
+  diff_html_shape_detail_a: "A"
+  diff_html_shape_detail_b: "B"
+  diff_html_shape_none: "No diff"
+
+  # excel grep html
+  grep_html_title: "Excel Grep Report"
+
+  grep_html_meta_title: "Meta"
+  grep_html_meta_keyword: "Keyword"
+  grep_html_meta_use_regex: "Regex"
+  grep_html_meta_file_regex: "File Regex"
+  grep_html_meta_sheet_regex: "Sheet Regex"
+  grep_html_meta_offset_row: "Row Offset"
+  grep_html_meta_offset_col: "Col Offset"
+  grep_html_meta_replace_pattern: "Replace"
+  grep_html_meta_replace_mode: "Mode"
+
+  grep_html_summary_title: "Summary"
+  grep_html_summary_files: "Files"
+  grep_html_summary_sheets: "Sheets"
+  grep_html_summary_hits: "Hits"
+  grep_html_summary_checked: "Checked"
+  grep_html_summary_diff: "Changed"
+
+  grep_html_results_title: "Results"
+  grep_html_col_no: "No"
+  grep_html_col_file: "File"
+  grep_html_col_sheet: "Sheet"
+  grep_html_col_hit: "Hit"
+  grep_html_col_target: "Target"
+  grep_html_col_before: "Before"
+  grep_html_col_after: "After"
+  grep_html_col_checked: "Checked"
+
+  grep_html_no_result: "No result"

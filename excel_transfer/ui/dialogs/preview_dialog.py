@@ -12,15 +12,18 @@ class PreviewReplaceDialog(tk.Toplevel):
         master,
         items: List[Dict[str, Any]],
         replace_pattern: str,
+        ctx,
     ):
         super().__init__(master)
-        self.title("置換プレビュー（Target に適用される文字列）")
-        self.geometry("1200x520")
-        self.resizable(True, True)
 
+        self.ctx = ctx
         self.items = items
         self.replace_pattern = replace_pattern
         self.result: List[Dict[str, Any]] | None = None
+
+        self.title(self.ctx.labels["preview_title"])
+        self.geometry("1200x520")
+        self.resizable(True, True)
 
         self._build()
         self._populate()
@@ -53,13 +56,13 @@ class PreviewReplaceDialog(tk.Toplevel):
             selectmode="none",
         )
 
-        self.tree.heading("checked", text="✔")
-        self.tree.heading("file", text="File")
-        self.tree.heading("sheet", text="Sheet")
-        self.tree.heading("hit_pos", text="Hit Cell")
-        self.tree.heading("target_pos", text="Target Cell（置換対象）")
-        self.tree.heading("before", text="Before（Target 現在値）")
-        self.tree.heading("replace", text="Replace With（置換文字列）")
+        self.tree.heading("checked", text=self.ctx.labels["preview_col_checked"])
+        self.tree.heading("file", text=self.ctx.labels["preview_col_file"])
+        self.tree.heading("sheet", text=self.ctx.labels["preview_col_sheet"])
+        self.tree.heading("hit_pos", text=self.ctx.labels["preview_col_hit"])
+        self.tree.heading("target_pos", text=self.ctx.labels["preview_col_target"])
+        self.tree.heading("before", text=self.ctx.labels["preview_col_before"])
+        self.tree.heading("replace", text=self.ctx.labels["preview_col_replace"])
 
         self.tree.column("checked", width=40, anchor="center")
         self.tree.column("file", width=220)
@@ -80,10 +83,29 @@ class PreviewReplaceDialog(tk.Toplevel):
         btns = ttk.Frame(self)
         btns.grid(row=2, column=0, sticky="e", padx=8, pady=8)
 
-        ttk.Button(btns, text="全選択", command=self._select_all).pack(side="left", padx=4)
-        ttk.Button(btns, text="全解除", command=self._clear_all).pack(side="left", padx=4)
-        ttk.Button(btns, text="Cancel", command=self._cancel).pack(side="left", padx=12)
-        ttk.Button(btns, text="OK", command=self._ok).pack(side="left")
+        ttk.Button(
+            btns,
+            text=self.ctx.labels["preview_btn_select_all"],
+            command=self._select_all,
+        ).pack(side="left", padx=4)
+
+        ttk.Button(
+            btns,
+            text=self.ctx.labels["preview_btn_clear_all"],
+            command=self._clear_all,
+        ).pack(side="left", padx=4)
+
+        ttk.Button(
+            btns,
+            text=self.ctx.labels["preview_btn_cancel"],
+            command=self._cancel,
+        ).pack(side="left", padx=12)
+
+        ttk.Button(
+            btns,
+            text=self.ctx.labels["preview_btn_ok"],
+            command=self._ok,
+        ).pack(side="left")
 
         self.tree.bind("<Button-1>", self._toggle_check)
 
