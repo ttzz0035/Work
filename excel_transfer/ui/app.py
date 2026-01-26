@@ -444,11 +444,13 @@ class GrepTab(BaseTab):
 
 
 # =========================================================
-# Diff Tab（DiffResult 対応）
+# Diff Tab（Multi Excel Picker 対応 / DiffResult 互換）
 # =========================================================
 class DiffTab(BaseTab):
     def __init__(self, app):
         super().__init__(app, app.ctx.labels["section_diff"])
+
+        # --- UI widgets ---
         self.file_a = None
         self.file_b = None
         self.range_a = None
@@ -459,40 +461,52 @@ class DiffTab(BaseTab):
         self.var_shapes = None
         self.sheet_mode = None
         self.report_btn = None
+
+        # --- internal ---
+        self.files_a: list[str] = []
+        self.files_b: list[str] = []
         self._last_result: DiffResult | None = None
+
         self.build()
 
+    # -------------------------------------------------
+    # UI
+    # -------------------------------------------------
     def build(self):
         self.tab.grid_columnconfigure(0, weight=1)
 
+        # --------------------------
+        # files
+        # --------------------------
         files = ttk.LabelFrame(self.tab, text=self.ctx.labels["diff_group_files"])
         files.grid(row=0, column=0, sticky="we", padx=4, pady=4)
         files.grid_columnconfigure(1, weight=1)
 
         ttk.Label(files, text=self.ctx.labels["label_diff_file_a"]).grid(row=0, column=0, sticky="w")
-        self.file_a = tk.Entry(files, width=70)
+        self.file_a = tk.Entry(files, width=70, state="readonly")
         self.file_a.grid(row=0, column=1, sticky="we", padx=4)
-        self.file_a.insert(0, self.ctx.user_paths.get("diff_file_a", ""))
 
         ttk.Button(
             files,
             text=self.ctx.labels["button_ellipsis"],
             width=3,
-            command=lambda: self.app.choose_file(self.file_a, "diff_file_a"),
+            command=lambda: self._choose_files("A"),
         ).grid(row=0, column=2, padx=(0, 4))
 
         ttk.Label(files, text=self.ctx.labels["label_diff_file_b"]).grid(row=1, column=0, sticky="w")
-        self.file_b = tk.Entry(files, width=70)
+        self.file_b = tk.Entry(files, width=70, state="readonly")
         self.file_b.grid(row=1, column=1, sticky="we", padx=4)
-        self.file_b.insert(0, self.ctx.user_paths.get("diff_file_b", ""))
 
         ttk.Button(
             files,
             text=self.ctx.labels["button_ellipsis"],
             width=3,
-            command=lambda: self.app.choose_file(self.file_b, "diff_file_b"),
+            command=lambda: self._choose_files("B"),
         ).grid(row=1, column=2, padx=(0, 4))
 
+        # --------------------------
+        # middle
+        # --------------------------
         mid = ttk.Frame(self.tab)
         mid.grid(row=1, column=0, sticky="we", padx=4, pady=4)
         mid.grid_columnconfigure(0, weight=1)
@@ -513,20 +527,12 @@ class DiffTab(BaseTab):
         base.grid(row=0, column=1, sticky="we", padx=(4, 0))
 
         self.diff_base = tk.StringVar(value="B")
-        ttk.Radiobutton(
-            base,
-            text=self.ctx.labels["diff_radio_base_b_default"],
-            variable=self.diff_base,
-            value="B",
-        ).pack(anchor="w")
+        ttk.Radiobutton(base, text="Base B", variable=self.diff_base, value="B").pack(anchor="w")
+        ttk.Radiobutton(base, text="Base A", variable=self.diff_base, value="A").pack(anchor="w")
 
-        ttk.Radiobutton(
-            base,
-            text=self.ctx.labels["diff_radio_base_a"],
-            variable=self.diff_base,
-            value="A",
-        ).pack(anchor="w")
-
+        # --------------------------
+        # options
+        # --------------------------
         opt = ttk.LabelFrame(self.tab, text=self.ctx.labels["diff_group_options"])
         opt.grid(row=2, column=0, sticky="we", padx=4, pady=4)
 
@@ -538,24 +544,19 @@ class DiffTab(BaseTab):
         ttk.Checkbutton(opt, text=self.ctx.labels["check_diff_include_context"], variable=self.var_ctx).pack(side="left")
         ttk.Checkbutton(opt, text=self.ctx.labels["check_diff_compare_shapes"], variable=self.var_shapes).pack(side="left")
 
+        # --------------------------
+        # sheet mode
+        # --------------------------
         sheet = ttk.LabelFrame(self.tab, text=self.ctx.labels["diff_group_sheet_mode"])
         sheet.grid(row=3, column=0, sticky="we", padx=4, pady=4)
 
         self.sheet_mode = tk.StringVar(value="index")
-        ttk.Radiobutton(
-            sheet,
-            text=self.ctx.labels["diff_radio_sheet_index_default"],
-            variable=self.sheet_mode,
-            value="index",
-        ).pack(anchor="w")
+        ttk.Radiobutton(sheet, text="Index", variable=self.sheet_mode, value="index").pack(anchor="w")
+        ttk.Radiobutton(sheet, text="Name", variable=self.sheet_mode, value="name").pack(anchor="w")
 
-        ttk.Radiobutton(
-            sheet,
-            text=self.ctx.labels["diff_radio_sheet_name"],
-            variable=self.sheet_mode,
-            value="name",
-        ).pack(anchor="w")
-
+        # --------------------------
+        # buttons
+        # --------------------------
         btns = ttk.Frame(self.tab)
         btns.grid(row=4, column=0, sticky="we", padx=4, pady=(4, 0))
         btns.grid_columnconfigure(0, weight=1)
@@ -573,25 +574,94 @@ class DiffTab(BaseTab):
             command=self.run,
         ).grid(row=0, column=1, sticky="e", padx=6, pady=6)
 
-    def _run_impl(self):
-        req = DiffRequest(
-            file_a=self.file_a.get().strip(),
-            file_b=self.file_b.get().strip(),
-            range_a=self.range_a.get().strip(),
-            range_b=self.range_b.get().strip(),
-            base_file=self.diff_base.get(),
-            compare_formula=self.var_formula.get(),
-            include_context=self.var_ctx.get(),
-            compare_shapes=self.var_shapes.get(),
-            sheet_mode=self.sheet_mode.get(),
+    # -------------------------------------------------
+    # file picker (MULTI)
+    # -------------------------------------------------
+    def _choose_files(self, side: str):
+        paths = filedialog.askopenfilenames(
+            title="Select Excel files",
+            filetypes=[("Excel", "*.xlsx *.xlsm *.xlsb")],
         )
+        if not paths:
+            return
 
-        result: DiffResult = run_diff(req, self.ctx, self.logger, self.log)
-        self._last_result = result
+        paths = [str(p) for p in paths]
 
-        self.log(f"[OK] Diff file: {result.diff_path}")
-        self.log(f"[OK] Diff JSON: {result.json_path}")
+        if side == "A":
+            self.files_a = paths
+            self._set_entry(self.file_a, paths)
+        else:
+            self.files_b = paths
+            self._set_entry(self.file_b, paths)
 
+    def _set_entry(self, entry: tk.Entry, paths: list[str]):
+        entry.config(state="normal")
+        entry.delete(0, "end")
+        if len(paths) == 1:
+            entry.insert(0, paths[0])
+        else:
+            entry.insert(0, f"{paths[0]}  (+{len(paths)-1} files)")
+        entry.config(state="readonly")
+
+    # -------------------------------------------------
+    # run
+    # -------------------------------------------------
+    def run(self):
+        try:
+            self._run_impl()
+        except Exception as e:
+            self.log(f"[ERR] Diff: {e}")
+            messagebox.showerror("Diff Error", str(e))
+
+    def _run_impl(self):
+        if not self.files_a or not self.files_b:
+            raise ValueError("Select at least one Excel file for both A and B")
+
+        na = len(self.files_a)
+        nb = len(self.files_b)
+
+        # ---- validate mode ----
+        if na == 1 and nb == 1:
+            pairs = [(self.files_a[0], self.files_b[0])]
+            mode = "1:1"
+        elif na == 1 and nb > 1:
+            pairs = [(self.files_a[0], b) for b in self.files_b]
+            mode = "1:N"
+        elif na > 1 and nb == 1:
+            pairs = [(a, self.files_b[0]) for a in self.files_a]
+            mode = "N:1"
+        elif na == nb:
+            pairs = list(zip(self.files_a, self.files_b))
+            mode = "N:N"
+        else:
+            raise ValueError(f"Invalid combination: A={na}, B={nb}")
+
+        self.log(f"[MODE] Diff mode = {mode} ({len(pairs)} job(s))")
+
+        last_result = None
+
+        for idx, (fa, fb) in enumerate(pairs, start=1):
+            self.log(f"[JOB] {idx}/{len(pairs)}")
+            req = DiffRequest(
+                file_a=fa,
+                file_b=fb,
+                range_a=self.range_a.get().strip(),
+                range_b=self.range_b.get().strip(),
+                base_file=self.diff_base.get().strip(),
+                compare_formula=self.var_formula.get(),
+                include_context=self.var_ctx.get(),
+                compare_shapes=self.var_shapes.get(),
+                sheet_mode=self.sheet_mode.get(),
+            )
+            last_result = run_diff(req, self.ctx, self.logger, self.log)
+
+        self._last_result = last_result
+        if last_result:
+            self.log(f"[OK] Last Diff: {last_result.diff_path}")
+
+    # -------------------------------------------------
+    # report
+    # -------------------------------------------------
     def make_report(self):
         if not self._last_result:
             messagebox.showwarning(
@@ -619,79 +689,6 @@ class DiffTab(BaseTab):
             self.ctx.labels["msg_report_title"],
             self.ctx.labels["msg_report_done_html"].format(path=out_path),
         )
-
-    # -------------------------------------------------
-    # run
-    # -------------------------------------------------
-    def run(self):
-        try:
-            self._run_impl()
-        except Exception as e:
-            self.log(f"[ERR] Diff: {e}")
-
-    def _run_impl(self):
-        # 保存
-        self.ctx.save_user_path("diff_file_a", self.file_a.get())
-        self.ctx.save_user_path("diff_file_b", self.file_b.get())
-        self.ctx.save_user_path("diff_range_a", self.range_a.get())
-        self.ctx.save_user_path("diff_range_b", self.range_b.get())
-        self.ctx.save_user_path("diff_base_file", self.diff_base.get())
-        self.ctx.save_user_path("diff_compare_formula", bool(self.var_formula.get()))
-        self.ctx.save_user_path("diff_include_context", bool(self.var_ctx.get()))
-        self.ctx.save_user_path("diff_compare_shapes", bool(self.var_shapes.get()))
-        self.ctx.save_user_path("diff_sheet_mode", self.sheet_mode.get())
-
-        req = DiffRequest(
-            file_a=self.file_a.get().strip(),
-            file_b=self.file_b.get().strip(),
-            range_a=self.range_a.get().strip(),
-            range_b=self.range_b.get().strip(),
-            base_file=self.diff_base.get().strip(),
-            compare_formula=self.var_formula.get(),
-            include_context=self.var_ctx.get(),
-            compare_shapes=self.var_shapes.get(),
-            sheet_mode=self.sheet_mode.get(),
-        )
-
-        out = run_diff(req, self.ctx, self.logger, self.log)
-        self.log(f"[OK] 差分レポート: {out}")
-
-    # -------------------------------------------------
-    # report
-    # -------------------------------------------------
-    def make_report(self):
-        self.log("[UI] select diff json")
-
-        json_path = filedialog.askopenfilename(
-            title=self.ctx.labels["dialog_select_diff_json_title"],
-            filetypes=[(self.ctx.labels["filetype_json"], "*.json")],
-        )
-        if not json_path:
-            self.log("[UI] canceled (json)")
-            return
-
-        self.log("[UI] select output html")
-
-        out_path = filedialog.asksaveasfilename(
-            title=self.ctx.labels["dialog_save_html_title"],
-            defaultextension=".html",
-            filetypes=[(self.ctx.labels["filetype_html"], "*.html")],
-        )
-        if not out_path:
-            self.log("[UI] canceled (html)")
-            return
-
-        generate_html_report(
-            Path(json_path),
-            Path(out_path),
-            self.ctx.labels,
-        )
-        self.log(f"[OK] HTMLレポート: {out_path}")
-        messagebox.showinfo(
-            self.ctx.labels["msg_report_title"],
-            self.ctx.labels["msg_report_done_html"].format(path=out_path),
-        )
-
 
 # =========================================================
 # Count Tab
@@ -1077,7 +1074,7 @@ class ExcelApp:
 
     def choose_file(self, entry, key):
         path = filedialog.askopenfilename(
-            filetypes=[(self.ctx.labels["filetype_excel"], "*.xlsx;*.xlsm;*.xlsb;*.xls")]
+            filetypes=[("Excel", "*.xlsx;*.xlsm;*.xlsb;*.xls")]
         )
         if path:
             entry.delete(0, tk.END)
