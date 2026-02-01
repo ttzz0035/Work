@@ -2,7 +2,7 @@
 import logging
 import threading
 from datetime import datetime
-from typing import Callable
+from typing import Callable, Dict
 
 from task_base import TaskBase
 from task_impl import TaskImpl
@@ -24,6 +24,7 @@ def _get_worker_logger():
 # =========================================================
 def _run_worker_impl(
     runtime: dict,
+    ui_state: Dict,
     ui_call: Callable[[Callable], None],
     append_logs: Callable[[], None],
     update_status: Callable[[], None],
@@ -35,16 +36,14 @@ def _run_worker_impl(
     runtime["started_at"] = datetime.now()
     runtime["ticks"] = 0
 
-    logger.info(
-        f"開始: job={runtime.get('item_id')} "
-        f"period={runtime.get('start')}～{runtime.get('end')}"
-    )
+    logger.info(f"[WORKER] start ui_state={ui_state}")
     ui_call(append_logs)
     ui_call(update_status)
 
-    # ★ 抽象型として扱う（状態を持つ Task）
+    # ★ Task に UIデータを丸ごと渡す
     task: TaskBase = TaskImpl(
         runtime=runtime,
+        ui_state=ui_state,
         logger=logger,
         ui_call=ui_call,
         append_logs=append_logs,
@@ -54,15 +53,14 @@ def _run_worker_impl(
     try:
         task.run()
     except Exception as e:
-        logger.exception(f"実行エラー: {e}")
+        logger.exception(f"[WORKER] error: {e}")
         ui_call(append_logs)
     finally:
         runtime["running"] = False
-        logger.info(f"終了: ticks={runtime['ticks']}")
+        logger.info(f"[WORKER] end ticks={runtime['ticks']}")
         ui_call(append_logs)
         ui_call(update_status)
         ui_call(stop_run)
-
 
 
 # =========================================================
@@ -70,6 +68,7 @@ def _run_worker_impl(
 # =========================================================
 def run_worker(
     runtime: dict,
+    ui_state: Dict,
     append_logs: Callable[[], None],
     update_status: Callable[[], None],
     stop_run: Callable[[], None],
@@ -80,14 +79,15 @@ def run_worker(
         logger.warning("既に worker が実行中です")
         return
 
+    # Flet: UI スレッド直接呼び
     ui_call = lambda fn: fn()
 
     th = threading.Thread(
         target=_run_worker_impl,
         name="WorkerThread",
-        args=(runtime, ui_call, append_logs, update_status, stop_run),
+        args=(runtime, ui_state, ui_call, append_logs, update_status, stop_run),
         daemon=True,
     )
     th.start()
 
-    logger.info("worker thread started")
+    logger.info("[WORKER] thread started")

@@ -29,9 +29,9 @@ LBL_MODE_REGISTER = "登録"
 LBL_MODE_VERIFY = "照合"
 
 # ボタン
-BTN_SET_THIS_MONTH = "当月"
+BTN_SET_THIS_MONTH = "今月"
 BTN_SET_YESTERDAY = "前日"
-BTN_SET_TODAY = "当日"
+BTN_SET_TODAY = "今日"
 BTN_RUN = "実行"
 BTN_STOP_AND_RETURN = "停止して戻る"
 BTN_CLEAR_LOG = "クリア"

@@ -1,102 +1,146 @@
 # SPDX-License-Identifier: MIT
 import time
-import logging
-from typing import Callable
-from playwright.sync_api import sync_playwright
-
 from task_base import TaskBase
-
-HEADELESS = False
 
 
 class TaskImpl(TaskBase):
-    def __init__(
-        self,
-        runtime: dict,
-        logger: logging.Logger,
-        ui_call: Callable,
-        append_logs: Callable[[], None],
-        update_status: Callable[[], None],
-    ):
-        self.runtime = runtime
-        self.logger = logger
-        self.ui_call = ui_call
-        self.append_logs = append_logs
-        self.update_status = update_status
-
     def run(self) -> None:
-        mode = self.runtime.get("mode")
+        # -------------------------------
+        # UI → Task 入力（Base経由）
+        # -------------------------------
+        mode = self.get_input("mode")
+        job_id = self.get_input("job_id")
+        start = self.get_input("start_date")
+        end = self.get_input("end_date")
 
-        if mode == "register":
-            self._run_register()
-        elif mode == "verify":
-            self._run_verify()
-        else:
-            self.logger.error(f"[TASK] unknown mode={mode}")
-            self.ui_call(self.append_logs)
+        print("=== TASK INPUT (via TaskBase) ===")
+        print("mode :", mode)
+        print("job  :", job_id)
+        print("start:", start)
+        print("end  :", end)
+        print("================================")
 
-    # -------------------------------------------------
-    # 登録処理
-    # -------------------------------------------------
-    def _run_register(self) -> None:
-        self.logger.info("[TASK] register start")
-        self.ui_call(self.append_logs)
-        self.ui_call(self.update_status)
+        # Base が提供する正規ログAPI
+        self.log(
+            f"[TASK] start mode={mode} job={job_id} "
+            f"period={start}～{end}"
+        )
 
-        print(self.runtime["start"], self.runtime["end"])
+        try:
+            if mode == "register":
+                self._run_register()
+            elif mode == "verify":
+                self._run_verify()
+            else:
+                raise ValueError(f"unknown mode={mode}")
 
-        with sync_playwright() as p:
-            self.logger.info("[TASK] launch chromium")
-            self.ui_call(self.append_logs)
+            self.finish()
 
-            browser = p.chromium.launch(headless=HEADELESS)
-            context = browser.new_context()
-            page = context.new_page()
+        except Exception as e:
+            self.fail(e)
 
-            page.goto("https://example.com")
+    # -------------------------------
+    # 登録処理（ダミー）
+    # -------------------------------
+    def _run_register(self):
+        self.log("[TASK] register start")
+        ##############################
+        # データロード
+        #
+        #
+        ##############################
 
-            for i in range(15):
-                if not self.runtime.get("running"):
-                    break
+        # データのサイズを実装する
+        l = len(range(10))
 
-                self.runtime["ticks"] += 1
-                self.logger.info(f"[TASK] working {i+1}/15")
-                self.ui_call(self.append_logs)
-                self.ui_call(self.update_status)
-                time.sleep(1)
+        for i in range(l):
+            if self.check_stop():
+                self.log("[TASK] stop requested")
+                return
+            
+            ###############################
+            # ここに実装
+            #
+            #
+            #
+            #
+            #
+            ###############################
 
-            context.close()
-            browser.close()
 
-        self.logger.info("[TASK] register end")
-        self.ui_call(self.append_logs)
-        self.ui_call(self.update_status)
+            # ticks++, last_tick_at 更新、UI通知を全部 Base がやる
+            self.step(f"[TASK] register step {i + 1}/3")
+            time.sleep(0.5)
 
-    # -------------------------------------------------
-    # 照合処理
-    # -------------------------------------------------
-    def _run_verify(self) -> None:
-        self.logger.info("[TASK] verify start")
-        self.ui_call(self.append_logs)
-        self.ui_call(self.update_status)
+        self.log("[TASK] register end")
 
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=HEADELESS)
-            page = browser.new_page()
-            page.goto("https://httpbin.org/get")
+    # -------------------------------
+    # 照合処理（ダミー）
+    # -------------------------------
+    def _run_verify(self):
+        self.log("[TASK] verify start")
+        ##############################
+        # データロード
+        #
+        #
+        ##############################
 
-            for i in range(5):
-                if not self.runtime.get("running"):
-                    break
+        # データのサイズを実装する
+        l = len(range(10))
 
-                self.runtime["ticks"] += 1
-                self.logger.info(f"[TASK] verifying {i+1}/5")
-                self.ui_call(self.append_logs)
-                self.ui_call(self.update_status)
-                time.sleep(1)
+        for i in range(l):
+            if self.check_stop():
+                self.log("[TASK] stop requested")
+                return
 
-            browser.close()
+            ###############################
+            # ここに実装
+            #
+            #
+            #
+            #
+            #
+            ###############################
 
-        self.logger.info("[TASK] verify end")
-        self.ui_call(self.append_logs)
-        self.ui_call(self.update_status)
+            self.step(f"[TASK] verify step {i + 1}/2")
+            time.sleep(0.5)
+
+        self.log("[TASK] verify end")
+
+if __name__ == "__main__":
+    import logging
+
+    # ダミー runtime / ui_state
+    runtime = {
+        "running": True,
+        "ticks": 0,
+    }
+
+    ui_state = {
+        "mode": "register",
+        "job_id": 123,
+        "start_date": "2026/02/01",
+        "end_date": "2026/02/01",
+    }
+
+    # ダミー UI コール
+    def ui_call(fn): fn()
+    def append_logs(): print("  [UI] log updated")
+    def update_status(): print("  [UI] status updated")
+
+    logger = logging.getLogger("TASK")
+    logger.setLevel(logging.INFO)
+    logger.addHandler(logging.StreamHandler())
+
+    task = TaskImpl(
+        runtime=runtime,
+        ui_state=ui_state,
+        logger=logger,
+        ui_call=ui_call,
+        append_logs=append_logs,
+        update_status=update_status,
+    )
+
+    task.run()
+
+    print("final ticks =", runtime["ticks"])

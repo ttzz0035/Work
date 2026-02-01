@@ -207,16 +207,30 @@ class AppController:
 
     # --------------------------------------------------------
     def start_run(self, tf_start, tf_end):
-        self.runtime.update(dict(
-            running=False, ticks=0,
-            started_at=datetime.now(), last_tick_at=None,
-            item_id=self.cfg.selected_item_id,
-            start=tf_start.value, end=tf_end.value,
+        ui_state = dict(
+            job_id=self.cfg.selected_item_id,
             mode=self.mode_group.value,
+            start_date=tf_start.value,
+            end_date=tf_end.value,
+        )
+
+        self.runtime.update(dict(
+            running=False,
+            ticks=0,
+            started_at=datetime.now(),
+            last_tick_at=None,
         ))
-        logging.info(f"[RUN] 実行開始: {self.runtime}")
+
+        logging.info(f"[RUN] UI state: {ui_state}")
         self.page.go("/run")
-        run_worker(self.runtime, self.append_logs_from_queue, self.update_status, self.stop_run)
+
+        run_worker(
+            runtime=self.runtime,
+            ui_state=ui_state,
+            append_logs=self.append_logs_from_queue,
+            update_status=self.update_status,
+            stop_run=self.stop_run,
+        )
 
     def stop_run(self, *var):
         self.stop()
