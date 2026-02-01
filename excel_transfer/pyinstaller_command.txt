@@ -1,1 +1,0 @@
-pyinstaller --onefile --noconsole excel_transfer.py
