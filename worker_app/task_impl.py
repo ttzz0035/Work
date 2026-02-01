@@ -51,9 +51,9 @@ class TaskImpl(TaskBase):
         ##############################
 
         # データのサイズを実装する
-        l = len(range(10))
+        total = len(range(10))
 
-        for i in range(l):
+        for i in range(total):
             if self.check_stop():
                 self.log("[TASK] stop requested")
                 return
@@ -69,7 +69,7 @@ class TaskImpl(TaskBase):
 
 
             # ticks++, last_tick_at 更新、UI通知を全部 Base がやる
-            self.step(f"[TASK] register step {i + 1}/3")
+            self.step(f"[TASK] register step {i + 1}/{total}")
             time.sleep(0.5)
 
         self.log("[TASK] register end")
@@ -86,9 +86,9 @@ class TaskImpl(TaskBase):
         ##############################
 
         # データのサイズを実装する
-        l = len(range(10))
+        total = len(range(10))
 
-        for i in range(l):
+        for i in range(total):
             if self.check_stop():
                 self.log("[TASK] stop requested")
                 return
@@ -102,7 +102,7 @@ class TaskImpl(TaskBase):
             #
             ###############################
 
-            self.step(f"[TASK] verify step {i + 1}/2")
+            self.step(f"[TASK] verify step {i + 1}/{total}")
             time.sleep(0.5)
 
         self.log("[TASK] verify end")
