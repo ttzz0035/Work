@@ -151,34 +151,87 @@ class AppController:
 
     # --------------------------------------------------------
     def append_logs_from_queue(self):
-        if not hasattr(self, "tf_logs") or self.tf_logs is None:
+        if self.tf_logs is None:
             return
+
+        appended = False
         while not self.ui_log_q.empty():
             self.tf_logs.value += self.ui_log_q.get_nowait() + "\n"
+            appended = True
+
+        if appended:
+            end = len(self.tf_logs.value)
+            self.tf_logs.selection = ft.TextSelection(end, end)
+
         self.page.update()
 
-    def update_status(self):
-        if not self.status_badge:
+    # --------------------------------------------------------
+    # 日付操作（追加）
+    # --------------------------------------------------------
+    @staticmethod
+    def _parse_date(s: str) -> date | None:
+        try:
+            return datetime.strptime(s, "%Y/%m/%d").date()
+        except Exception:
+            return None
+
+    def _offset_date(self, tf: ft.TextField, days: int):
+        d = self._parse_date(tf.value)
+        if not d:
+            logging.warning("[DATE] 不正な日付")
             return
-        rt = self.runtime
-        if rt["running"]:
-            self.status_badge.bgcolor = ft.Colors.GREEN
-            self.status_badge.content = ft.Text("RUNNING", color=ft.Colors.WHITE, weight="bold")
-            if rt["started_at"]:
-                self.lbl_started.value = rt["started_at"].strftime("%Y-%m-%d %H:%M:%S")
-                sec = int((datetime.now() - rt["started_at"]).total_seconds())
-                h, m, s = sec // 3600, (sec % 3600)//60, sec % 60
-                self.lbl_elapsed.value = f"{h:02d}:{m:02d}:{s:02d}"
-            self.lbl_ticks.value = str(rt["ticks"])
-        else:
-            self.status_badge.bgcolor = ft.Colors.GREY
-            self.status_badge.content = ft.Text("STOPPED", color=ft.Colors.WHITE, weight="bold")
+        tf.value = (d + timedelta(days=days)).strftime("%Y/%m/%d")
         self.page.update()
+
+    def set_today(self, tf_start, tf_end):
+        s = self.today_str(0)
+        tf_start.value = tf_end.value = s
+        self.page.update()
+
+    def set_this_week(self, tf_start, tf_end):
+        today = date.today()
+        start = today - timedelta(days=today.weekday())
+        end = start + timedelta(days=6)
+        tf_start.value = start.strftime("%Y/%m/%d")
+        tf_end.value = end.strftime("%Y/%m/%d")
+        self.page.update()
+
+    def set_this_month(self, tf_start, tf_end):
+        d = date.today()
+        first = d.replace(day=1)
+        next_month = (first.replace(day=28) + timedelta(days=4)).replace(day=1)
+        last = next_month - timedelta(days=1)
+        tf_start.value = first.strftime("%Y/%m/%d")
+        tf_end.value = last.strftime("%Y/%m/%d")
+        self.page.update()
+
+    # --------------------------------------------------------
+    def start_run(self, tf_start, tf_end):
+        self.runtime.update(dict(
+            running=False, ticks=0,
+            started_at=datetime.now(), last_tick_at=None,
+            item_id=self.cfg.selected_item_id,
+            start=tf_start.value, end=tf_end.value,
+            mode=self.mode_group.value,
+        ))
+        logging.info(f"[RUN] 実行開始: {self.runtime}")
+        self.page.go("/run")
+        run_worker(self.runtime, self.append_logs_from_queue, self.update_status, self.stop_run)
+
+    def stop_run(self, *var):
+        self.stop()
+        logging.debug(var)
+        self.page.go("/")
 
     # --------------------------------------------------------
     # 設定画面
     # --------------------------------------------------------
     def build_settings(self) -> ft.View:
+        FIELD_W = 150
+        ARROW_W = 14
+
+        self._run_handler = lambda _: self.start_run(tf_start, tf_end)
+
         cw, fw = self.card_width, self.field_width
         items = get_items()
 
@@ -190,81 +243,211 @@ class AppController:
             on_change=lambda e: self._on_job_change(dd_job),
         )
 
-        tf_start = ft.TextField(label=LBL_START_DATE, value=self.today_str(), width=(fw // 2.2 - 4))
-        tf_end   = ft.TextField(label=LBL_END_DATE, value=self.today_str(), width=(fw // 2.2 - 4))
+        tf_start = ft.TextField(
+            label=LBL_START_DATE,
+            value=self.today_str(0),
+            width=FIELD_W,
+        )
+        tf_end = ft.TextField(
+            label=LBL_END_DATE,
+            value=self.today_str(0),
+            width=FIELD_W,
+        )
+
+        # -------- 日付操作（連動補正込み）--------
+        def _parse(v):
+            try:
+                return datetime.strptime(v, "%Y/%m/%d").date()
+            except Exception:
+                return None
+
+        def _sync_after_change():
+            ds = _parse(tf_start.value)
+            de = _parse(tf_end.value)
+            if not ds or not de:
+                return
+            if ds > de:
+                tf_end.value = tf_start.value
+            elif de < ds:
+                tf_start.value = tf_end.value
+
+        # 開始日ブロック
+        start_block = ft.Row(
+            [
+                ft.IconButton(
+                    ft.Icons.CHEVRON_LEFT,
+                    on_click=lambda _: (
+                        setattr(tf_start, "value",
+                                (_parse(tf_start.value) - timedelta(days=1)).strftime("%Y/%m/%d")),
+                        _sync_after_change(),
+                        self.page.update(),
+                    ),
+                    icon_size=14,
+                    width=ARROW_W,
+                    height=ARROW_W,
+                    padding=0,
+                ),
+                tf_start,
+                ft.IconButton(
+                    ft.Icons.CHEVRON_RIGHT,
+                    on_click=lambda _: (
+                        setattr(tf_start, "value",
+                                (_parse(tf_start.value) + timedelta(days=1)).strftime("%Y/%m/%d")),
+                        _sync_after_change(),
+                        self.page.update(),
+                    ),
+                    icon_size=14,
+                    width=ARROW_W,
+                    height=ARROW_W,
+                    padding=0,
+                ),
+            ],
+            spacing=4,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+
+        # 終了日ブロック
+        end_block = ft.Row(
+            [
+                ft.IconButton(
+                    ft.Icons.CHEVRON_LEFT,
+                    on_click=lambda _: (
+                        setattr(tf_end, "value",
+                                (_parse(tf_end.value) - timedelta(days=1)).strftime("%Y/%m/%d")),
+                        _sync_after_change(),
+                        self.page.update(),
+                    ),
+                    icon_size=14,
+                    width=ARROW_W,
+                    height=ARROW_W,
+                    padding=0,
+                ),
+                tf_end,
+                ft.IconButton(
+                    ft.Icons.CHEVRON_RIGHT,
+                    on_click=lambda _: (
+                        setattr(tf_end, "value",
+                                (_parse(tf_end.value) + timedelta(days=1)).strftime("%Y/%m/%d")),
+                        _sync_after_change(),
+                        self.page.update(),
+                    ),
+                    icon_size=14,
+                    width=ARROW_W,
+                    height=ARROW_W,
+                    padding=0,
+                ),
+            ],
+            spacing=4,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+
+        period_row = ft.Row(
+            [start_block, end_block],
+            spacing=16,
+            alignment=ft.MainAxisAlignment.CENTER,
+            width=fw,
+        )
 
         # 実行モード
         self.mode_group = ft.RadioGroup(
             value=self.cfg.exec_mode,
-            content=ft.Row([
-                ft.Radio(value=MODE_REGISTER, label=LBL_MODE_REGISTER),
-                ft.Radio(value=MODE_VERIFY, label=LBL_MODE_VERIFY),
-            ], alignment=ft.MainAxisAlignment.START, spacing=20),
+            content=ft.Row(
+                [
+                    ft.Radio(value=MODE_REGISTER, label=LBL_MODE_REGISTER),
+                    ft.Radio(value=MODE_VERIFY, label=LBL_MODE_VERIFY),
+                ],
+                alignment=ft.MainAxisAlignment.START,
+                spacing=20,
+            ),
             on_change=lambda e: self._on_mode_change(),
         )
 
-        def set_this_month(_):
-            d = date.today()
-            first = d.replace(day=1)
-            next_month = (first.replace(day=28) + timedelta(days=4)).replace(day=1)
-            last = next_month - timedelta(days=1)
-            tf_start.value, tf_end.value = first.strftime("%Y-%m-%d"), last.strftime("%Y-%m-%d")
-            self.page.update()
-
-        def set_today(_):
-            s = self.today_str()
-            tf_start.value = tf_end.value = s
-            self.page.update()
-
-        def start_run(_):
-            self.runtime.update(dict(
-                running=True, ticks=0,
-                started_at=datetime.now(), last_tick_at=None,
-                item_id=self.cfg.selected_item_id,
-                start=tf_start.value, end=tf_end.value,
-                mode=self.mode_group.value,
-            ))
-            logging.info(f"[RUN] 実行開始: {self.runtime}")
-            self.page.go("/run")
-            run_worker(self.runtime, self.append_logs_from_queue, self.update_status)
-            self.page.go("/")
-
         job_card = ft.Card(
             content=ft.Container(
-                width=cw, padding=IN_PADDING,
-                content=ft.Column([ft.Text(LBL_JOB_SETTING, size=16, weight="bold"), dd_job], spacing=10)
+                width=cw,
+                padding=IN_PADDING,
+                content=ft.Column(
+                    [ft.Text(LBL_JOB_SETTING, size=16, weight="bold"), dd_job],
+                    spacing=10,
+                ),
             )
         )
 
         date_card = ft.Card(
             content=ft.Container(
-                width=cw, padding=IN_PADDING,
-                content=ft.Column([
-                    ft.Text(LBL_PERIOD_SETTING, size=16, weight="bold"),
-                    ft.Row([tf_start, tf_end], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, width=fw),
-                    ft.Row([
-                        ft.ElevatedButton(BTN_SET_THIS_MONTH, on_click=set_this_month, style=self.button_style_secondary),
-                        ft.ElevatedButton(BTN_SET_TODAY, on_click=set_today, style=self.button_style_secondary),
-                    ], alignment=ft.MainAxisAlignment.START, width=fw),
-                ], spacing=10)
+                width=cw,
+                padding=IN_PADDING,
+                content=ft.Column(
+                    [
+                        ft.Text(LBL_PERIOD_SETTING, size=16, weight="bold"),
+                        period_row,
+                        ft.Row(
+                            [
+                                ft.ElevatedButton(
+                                    BTN_SET_THIS_MONTH,
+                                    on_click=lambda _: (
+                                        self.set_this_month(tf_start, tf_end),
+                                        self.page.update(),
+                                    ),
+                                    style=self.button_style_secondary,
+                                ),
+                                ft.ElevatedButton(
+                                    "今週",
+                                    on_click=lambda _: (
+                                        self.set_this_week(tf_start, tf_end),
+                                        self.page.update(),
+                                    ),
+                                    style=self.button_style_secondary,
+                                ),
+                                ft.ElevatedButton(
+                                    BTN_SET_TODAY,
+                                    on_click=lambda _: (
+                                        self.set_today(tf_start, tf_end),
+                                        self.page.update(),
+                                    ),
+                                    style=self.button_style_secondary,
+                                ),
+                            ],
+                            alignment=ft.MainAxisAlignment.START,
+                            width=fw,
+                        ),
+                    ],
+                    spacing=10,
+                ),
             )
         )
 
         control_card = ft.Card(
             content=ft.Container(
-                width=cw, padding=IN_PADDING,
-                content=ft.Row([
-                    self.mode_group,
-                    ft.ElevatedButton(BTN_RUN, on_click=start_run, width=fw // 2, style=self.button_style_primary),
-                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                width=cw,
+                padding=IN_PADDING,
+                content=ft.Row(
+                    [
+                        self.mode_group,
+                        ft.ElevatedButton(
+                            BTN_RUN,
+                            on_click=self._run_handler,
+                            width=fw // 2,
+                            style=self.button_style_primary,
+                        ),
+                    ],
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                ),
             )
         )
 
-        layout = ft.ListView(expand=True, spacing=10, padding=0, controls=[job_card, date_card, control_card])
+        layout = ft.ListView(
+            expand=True,
+            spacing=10,
+            padding=0,
+            controls=[job_card, date_card, control_card],
+        )
+
         return ft.View("/", [ft.Container(width=cw, content=layout)])
 
+    
     # --------------------------------------------------------
-    # 実行画面
+    # 実行画面（既存）
     # --------------------------------------------------------
     def build_run(self) -> ft.View:
         cw, fw = self.card_width, self.field_width
@@ -283,10 +466,6 @@ class AppController:
             min_lines=12, max_lines=12, width=fw, expand=False
         )
 
-        def stop_run(_):
-            self.stop()
-            self.page.go("/")
-
         status_card = ft.Card(
             content=ft.Container(
                 width=cw, padding=IN_PADDING,
@@ -296,7 +475,7 @@ class AppController:
                     ft.Row([ft.Text(LBL_STARTED), self.lbl_started]),
                     ft.Row([ft.Text(LBL_ELAPSED), self.lbl_elapsed]),
                     ft.Row([ft.Text(LBL_TICKS), self.lbl_ticks]),
-                    ft.Row([ft.ElevatedButton(BTN_STOP_AND_RETURN, on_click=stop_run, style=self.button_style_secondary)]),
+                    ft.Row([ft.ElevatedButton(BTN_STOP_AND_RETURN, on_click=self.stop_run, style=self.button_style_secondary)]),
                 ], spacing=6)
             )
         )
@@ -338,6 +517,43 @@ class AppController:
         logging.info("[RUN] 停止要求")
         self.update_status()
 
+    def update_status(self):
+        if not self.status_badge:
+            return
+
+        rt = self.runtime
+
+        # 開始時刻は running / stopped に関係なく表示
+        if rt.get("started_at"):
+            self.lbl_started.value = rt["started_at"].strftime("%Y/%m/%d %H:%M:%S")
+        else:
+            self.lbl_started.value = "—"
+
+        if rt.get("running"):
+            self.status_badge.bgcolor = ft.Colors.GREEN
+            self.status_badge.content = ft.Text(
+                "RUNNING", color=ft.Colors.WHITE, weight="bold"
+            )
+
+            if rt.get("started_at"):
+                sec = int((datetime.now() - rt["started_at"]).total_seconds())
+                h, m, s = sec // 3600, (sec % 3600) // 60, sec % 60
+                self.lbl_elapsed.value = f"{h:02d}:{m:02d}:{s:02d}"
+            else:
+                self.lbl_elapsed.value = "—"
+
+            self.lbl_ticks.value = str(rt.get("ticks", 0))
+
+        else:
+            self.status_badge.bgcolor = ft.Colors.GREY
+            self.status_badge.content = ft.Text(
+                "STOPPED", color=ft.Colors.WHITE, weight="bold"
+            )
+            self.lbl_elapsed.value = "—"
+            self.lbl_ticks.value = str(rt.get("ticks", 0))
+
+        self.page.update()
+
     def route_change(self, e: ft.RouteChangeEvent):
         self._fix_window_width(CARD_WIDTH)
         self.page.views.clear()
@@ -348,13 +564,13 @@ class AppController:
         self.page.update()
 
     @staticmethod
-    def today_str() -> str:
-        return date.today().strftime("%Y-%m-%d")
+    def today_str(offset:int=0) -> str:
+        day = date.today() + timedelta(days=offset)
+        return day.strftime("%Y/%m/%d")
 
 
 # ------------------------------------------------------------
 def main(page: ft.Page):
     AppController(page)
-
 
 ft.app(target=main)

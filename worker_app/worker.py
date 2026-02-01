@@ -1,68 +1,93 @@
 # SPDX-License-Identifier: MIT
 import logging
-import time
+import threading
 from datetime import datetime
+from typing import Callable
 
-def run_worker(runtime: dict, append_logs: callable, update_status: callable):
-    """
-    本番テンプレート: 登録/照合いずれにも対応。
-    - runtime: 実行状態(dict)
-    - append_logs(): UIログ反映
-    - update_status(): UIステータス反映
-    """
-    rt = runtime
-    rt["started_at"] = datetime.now()
-    rt["ticks"] = 0
-    rt["running"] = True
+from task_base import TaskBase
+from task_impl import TaskImpl
 
-    logging.info(
-        f"[WORKER] 開始: モード={rt.get('mode','?')} / "
-        f"ジョブID={rt.get('item_id','-')} / "
-        f"期間={rt.get('start')}～{rt.get('end')}"
+
+# =========================================================
+# Logger（root → UI queue）
+# =========================================================
+def _get_worker_logger():
+    lg = logging.getLogger("WORKER")
+    lg.setLevel(logging.INFO)
+    lg.handlers.clear()
+    lg.propagate = True
+    return lg
+
+
+# =========================================================
+# Worker 本体
+# =========================================================
+def _run_worker_impl(
+    runtime: dict,
+    ui_call: Callable[[Callable], None],
+    append_logs: Callable[[], None],
+    update_status: Callable[[], None],
+    stop_run: Callable[[], None],
+):
+    logger = _get_worker_logger()
+
+    runtime["running"] = True
+    runtime["started_at"] = datetime.now()
+    runtime["ticks"] = 0
+
+    logger.info(
+        f"開始: job={runtime.get('item_id')} "
+        f"period={runtime.get('start')}～{runtime.get('end')}"
+    )
+    ui_call(append_logs)
+    ui_call(update_status)
+
+    # ★ 抽象型として扱う（状態を持つ Task）
+    task: TaskBase = TaskImpl(
+        runtime=runtime,
+        logger=logger,
+        ui_call=ui_call,
+        append_logs=append_logs,
+        update_status=update_status,
     )
 
-    while rt["running"]:
-        rt["ticks"] += 1
-        rt["last_tick_at"] = datetime.now()
+    try:
+        task.run()
+    except Exception as e:
+        logger.exception(f"実行エラー: {e}")
+        ui_call(append_logs)
+    finally:
+        runtime["running"] = False
+        logger.info(f"終了: ticks={runtime['ticks']}")
+        ui_call(append_logs)
+        ui_call(update_status)
+        ui_call(stop_run)
 
-        # 実行状況を都度ログ
-        logging.info(
-            f"[WORKER] 実行中: "
-            f"モード={rt.get('mode','?')} / "
-            f"ジョブID={rt.get('item_id','-')} / "
-            f"期間={rt.get('start')}～{rt.get('end')} / "
-            f"実行回数={rt['ticks']}回"
-        )
 
-        append_logs()
-        update_status()
 
-        # ▼▼▼ 本番処理（登録/照合）をここに実装 ▼▼▼
-        try:
-            if rt["mode"] == "register":
-                # TODO: 登録ロジック
-                # 例) insert_to_db(...), call_api(...)
-                pass
-            elif rt["mode"] == "verify":
-                # TODO: 照合ロジック
-                # 例) compare_records(...), fetch_and_match(...)
-                pass
-            else:
-                logging.warning(f"[WORKER] 不明なモード={rt.get('mode')}")
-                rt["running"] = False
-        except Exception as e:
-            logging.error(f"[WORKER] エラー: {e}")
-            rt["running"] = False
-            break
-        # ▲▲▲ ここまで差し替えポイント ▲▲▲
+# =========================================================
+# UI エントリ
+# =========================================================
+def run_worker(
+    runtime: dict,
+    append_logs: Callable[[], None],
+    update_status: Callable[[], None],
+    stop_run: Callable[[], None],
+):
+    logger = _get_worker_logger()
 
-        time.sleep(1.0)
+    if runtime.get("running"):
+        logger.warning("既に worker が実行中です")
+        return
 
-        # デバッグ上限（本番では外部条件で停止）
-        if rt["ticks"] >= 10:
-            logging.info(f"[WORKER] 規定回数に到達 → 終了 (実行回数={rt['ticks']})")
-            rt["running"] = False
+    ui_call = lambda fn: fn()
 
-    logging.info(f"[WORKER] 終了: 実行回数={rt['ticks']}回")
-    append_logs()
-    update_status()
+    th = threading.Thread(
+        target=_run_worker_impl,
+        name="WorkerThread",
+        args=(runtime, ui_call, append_logs, update_status, stop_run),
+        daemon=True,
+    )
+    th.start()
+
+    logger.info("worker thread started")
