@@ -8,12 +8,53 @@ import logging
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from core.render import render_annotated  # (src_png:Path, meta:dict, folder:Path) -> Path
+from core.render import render_annotated
 
 log = logging.getLogger("ui.preview")
 
 
-# --- フォーカス外れ検知用 PlainTextEdit ---
+# ==================================================
+# Theme helpers (Qt Palette based)
+# ==================================================
+def _pal(c: QtWidgets.QWidget) -> QtGui.QPalette:
+    return c.palette()
+
+
+def UI_BG(w: QtWidgets.QWidget) -> QtGui.QColor:
+    return _pal(w).color(QtGui.QPalette.Base)
+
+
+def UI_PANEL(w: QtWidgets.QWidget) -> QtGui.QColor:
+    return _pal(w).color(QtGui.QPalette.Window)
+
+
+def UI_TEXT(w: QtWidgets.QWidget) -> QtGui.QColor:
+    return _pal(w).color(QtGui.QPalette.Text)
+
+
+def UI_TEXT_DIM(w: QtWidgets.QWidget) -> QtGui.QColor:
+    return _pal(w).color(QtGui.QPalette.PlaceholderText)
+
+
+def UI_BORDER(w: QtWidgets.QWidget) -> QtGui.QColor:
+    return _pal(w).color(QtGui.QPalette.Mid)
+
+
+def UI_BTN_BG(w: QtWidgets.QWidget) -> QtGui.QColor:
+    return _pal(w).color(QtGui.QPalette.Button)
+
+
+def UI_BTN_BG_HOVER(w: QtWidgets.QWidget) -> QtGui.QColor:
+    return _pal(w).color(QtGui.QPalette.Light)
+
+
+def UI_ACCENT(w: QtWidgets.QWidget) -> QtGui.QColor:
+    return _pal(w).color(QtGui.QPalette.Highlight)
+
+
+# ==================================================
+# Focus helper
+# ==================================================
 class FocusSavePlainTextEdit(QtWidgets.QPlainTextEdit):
     focusLost = QtCore.Signal()
 
@@ -24,6 +65,77 @@ class FocusSavePlainTextEdit(QtWidgets.QPlainTextEdit):
             super().focusOutEvent(e)
 
 
+# ==================================================
+# Overlay image view
+# ==================================================
+class OverlayImageView(QtWidgets.QLabel):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setScaledContents(False)
+        self._pixmap: Optional[QtGui.QPixmap] = None
+        self._img_w = 0
+        self._img_h = 0
+        self._rects: list[dict] = []
+        self.setMinimumSize(320, 180)
+
+    def set_image(self, pm: QtGui.QPixmap, img_w_px: int, img_h_px: int):
+        self._pixmap = pm
+        self._img_w = int(img_w_px)
+        self._img_h = int(img_h_px)
+        self.update()
+
+    def set_rects_img_px(self, rects: Optional[List[dict]]):
+        self._rects = rects or []
+        self.update()
+
+    def _fit_rect(self, vw: int, vh: int) -> QtCore.QRect:
+        if self._img_w <= 0 or self._img_h <= 0 or vw <= 0 or vh <= 0:
+            return QtCore.QRect(0, 0, 0, 0)
+        sx = vw / self._img_w
+        sy = vh / self._img_h
+        s = min(sx, sy)
+        w = int(round(self._img_w * s))
+        h = int(round(self._img_h * s))
+        x = (vw - w) // 2
+        y = (vh - h) // 2
+        return QtCore.QRect(x, y, w, h)
+
+    def paintEvent(self, e: QtGui.QPaintEvent):
+        p = QtGui.QPainter(self)
+        p.setRenderHint(QtGui.QPainter.SmoothPixmapTransform, True)
+
+        # 背景（テーマ追従）
+        p.fillRect(self.rect(), UI_BG(self))
+
+        vw, vh = self.width(), self.height()
+        fit = self._fit_rect(vw, vh)
+
+        if self._pixmap and not self._pixmap.isNull() and fit.width() > 0 and fit.height() > 0:
+            p.drawPixmap(fit, self._pixmap)
+
+            sx = fit.width() / max(1, self._img_w)
+            sy = fit.height() / max(1, self._img_h)
+
+            p.setRenderHint(QtGui.QPainter.Antialiasing, True)
+            for r in self._rects:
+                x = fit.left() + int(round(r.get("x", 0) * sx))
+                y = fit.top() + int(round(r.get("y", 0) * sy))
+                w = int(round(r.get("w", 0) * sx))
+                h = int(round(r.get("h", 0) * sy))
+
+                color = r.get("color", UI_ACCENT(self).name())
+                stroke = max(1, int(round(r.get("stroke", 2) * sx)))
+                pen = QtGui.QPen(QtGui.QColor(color))
+                pen.setWidth(stroke)
+                pen.setJoinStyle(QtCore.Qt.MiterJoin)
+                p.setPen(pen)
+                p.setBrush(QtCore.Qt.NoBrush)
+                p.drawRect(QtCore.QRect(x, y, w, h))
+
+
+# ==================================================
+# Card data
+# ==================================================
 @dataclass
 class CardData:
     json_path: Path
@@ -32,10 +144,6 @@ class CardData:
     comment: str
     display_title: str
     ann_png_path: Optional[Path] = None
-
-    @property
-    def title(self) -> str:
-        return self.display_title
 
     def load_meta(self) -> dict:
         return json.loads(self.json_path.read_text(encoding="utf-8"))
@@ -54,66 +162,52 @@ class CardData:
         return self.ann_png_path
 
     def delete_files(self):
-        # ann
-        try:
-            if self.ann_png_path and self.ann_png_path.exists():
-                self.ann_png_path.unlink()
-                log.info("annPng Delete: %s", self.ann_png_path.name)
-        except Exception as e:
-            log.warning("annPng Delete Failed: %s (%s)", self.ann_png_path, e)
-        # base
-        try:
-            bp = self.base_png_abs()
-            if bp.exists():
-                bp.unlink()
-                log.info("basePNG Delete: %s", bp.name)
-        except Exception as e:
-            log.warning("basePNG Delete Failed: %s", e)
-        # json
-        try:
-            if self.json_path.exists():
-                self.json_path.unlink()
-                log.info("JSON Delete: %s", self.json_path.name)
-        except Exception as e:
-            log.warning("JSON Delete Failed: %s", e)
+        if self.ann_png_path and self.ann_png_path.exists():
+            self.ann_png_path.unlink()
+
+        bp = self.base_png_abs()
+        if bp.exists():
+            bp.unlink()
+
+        if self.json_path.exists():
+            self.json_path.unlink()
 
 
+# ==================================================
+# Card widget
+# ==================================================
 class CardWidget(QtWidgets.QFrame):
     requestRemove = QtCore.Signal(object)
     requestRefresh = QtCore.Signal(object)
 
     def __init__(self, data: CardData, parent=None):
         super().__init__(parent)
-        self.setFrameShape(QtWidgets.QFrame.StyledPanel)
-        self.setObjectName("Card")
-        self.setStyleSheet("""
-        QFrame#Card{border:1px solid #ddd;border-radius:8px;background:#fff;}
-        QToolButton{background:#f7f7f7;border:1px solid #ccc;border-radius:6px;padding:4px 8px;}
-        QToolButton:hover{background:#eee;}
-        QLabel.head{font-weight:600;padding:6px 8px;border-bottom:1px solid #eee;background:#fafafa;border-top-left-radius:8px;border-top-right-radius:8px;}
-        QLineEdit#titleEdit{padding:4px 6px;border:1px solid #ccc;border-radius:6px;min-width:260px;}
-        """)
-
         self.data = data
+
+        self.setFrameShape(QtWidgets.QFrame.StyledPanel)
+        self.setAutoFillBackground(True)
+        pal = self.palette()
+        pal.setColor(QtGui.QPalette.Window, UI_PANEL(self))
+        pal.setColor(QtGui.QPalette.WindowText, UI_TEXT(self))
+        self.setPalette(pal)
 
         # Header
         self.head_lbl = QtWidgets.QLabel("Title:")
-        self.head_lbl.setProperty("class", "head")
         self.title_edit = QtWidgets.QLineEdit(self.data.display_title)
-        self.title_edit.setObjectName("titleEdit")
-        self.title_edit.setToolTip("HTML/Excel Auto Save")
 
-        # Buttons: OpenImage / Save / Delete
-        self.btn_open_img = QtWidgets.QToolButton(self); self.btn_open_img.setText("OpenImage")
-        self.btn_save     = QtWidgets.QToolButton(self); self.btn_save.setText("Save")
-        self.btn_delete   = QtWidgets.QToolButton(self); self.btn_delete.setText("Delete")
+        # Buttons
+        self.btn_open_img = QtWidgets.QToolButton(self); self.btn_open_img.setText("Open")
+        self.btn_save = QtWidgets.QToolButton(self); self.btn_save.setText("Save")
+        self.btn_delete = QtWidgets.QToolButton(self); self.btn_delete.setText("Delete")
+
+        for b in (self.btn_open_img, self.btn_save, self.btn_delete):
+            b.setAutoRaise(False)
 
         # Image
-        self.image_lbl = QtWidgets.QLabel()
-        self.image_lbl.setAlignment(QtCore.Qt.AlignCenter)
-        self.image_lbl.setMinimumSize(320, 180)
+        self.image_view = OverlayImageView(self)
+        self.image_view.setAlignment(QtCore.Qt.AlignCenter)
 
-        # Comment（フォーカス外れで保存）
+        # Comment
         self.comment_edit = FocusSavePlainTextEdit(self.data.comment)
         self.comment_edit.setPlaceholderText("comment…")
 
@@ -127,11 +221,11 @@ class CardWidget(QtWidgets.QFrame):
         header.addWidget(self.btn_delete)
 
         body = QtWidgets.QHBoxLayout()
-        body.addWidget(self.image_lbl, 0)
+        body.addWidget(self.image_view, 0)
         body.addWidget(self.comment_edit, 1)
 
         lay = QtWidgets.QVBoxLayout(self)
-        lay.setContentsMargins(0,0,0,0)
+        lay.setContentsMargins(8, 8, 8, 8)
         lay.addLayout(header)
         lay.addLayout(body)
 
@@ -139,103 +233,78 @@ class CardWidget(QtWidgets.QFrame):
         self.btn_open_img.clicked.connect(self._on_open_image)
         self.btn_save.clicked.connect(self._save_now)
         self.btn_delete.clicked.connect(self._on_delete)
+        self.title_edit.editingFinished.connect(self._save_title_only)
+        self.comment_edit.focusLost.connect(self._save_comment_only)
 
-        self.title_edit.editingFinished.connect(self._save_title_only)   # ← フォーカス外れ/Enterで保存
-        self.comment_edit.focusLost.connect(self._save_comment_only)     # ← フォーカス外れで保存
-
-        # 初期表示
         self.refresh_image()
 
-    # --- UI 更新 ---
+    # -------------------------------------------------
     def refresh_image(self):
+        base_png = self.data.base_png_abs()
         try:
-            ann = self.data.regenerate_ann()
-        except Exception as e:
-            log.error("Ann Image Create Failed: %s", e)
-            ann = None
+            meta = self.data.load_meta()
+        except Exception:
+            pm = QtGui.QPixmap(str(base_png))
+            self.image_view.set_image(pm, pm.width(), pm.height())
+            self.image_view.set_rects_img_px([])
+            return
 
-        if ann and ann.exists():
-            pm = QtGui.QPixmap(str(ann))
-        else:
-            pm = QtGui.QPixmap(self.data.base_png_abs().as_posix())
+        rects_img_px = meta.get("rects_img_px")
+        img_px = meta.get("image_px") or {}
+        img_w = int(img_px.get("width") or 0)
+        img_h = int(img_px.get("height") or 0)
 
-        if not pm.isNull():
-            pm = pm.scaled(600, 600, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
-        self.image_lbl.setPixmap(pm)
+        pm = QtGui.QPixmap(str(base_png))
+        self.image_view.set_image(pm, img_w or pm.width(), img_h or pm.height())
+        self.image_view.set_rects_img_px(rects_img_px or [])
 
-    # --- OpenImage ---
+    # -------------------------------------------------
     def _on_open_image(self):
         png = self.data.base_png_abs()
-        if not png.exists():
-            QtWidgets.QMessageBox.information(self, "Open image", f"Not found: {png.name}")
-            return
-        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(png)))
+        if png.exists():
+            QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(png)))
 
-    # --- Save(手動) ---
     def _save_now(self):
-        title = self.title_edit.text().strip()
-        if not title:
-            QtWidgets.QMessageBox.information(self, "Save", "Title Empty")
-            self.title_edit.setText(self.data.display_title)
-            return
         try:
             meta = self.data.load_meta()
-            meta["display_title"] = title
+            meta["display_title"] = self.title_edit.text().strip()
             meta["comment"] = self.comment_edit.toPlainText()
-            self.data.display_title = title
-            self.data.comment = meta["comment"]
             self.data.save_meta(meta)
-
-            # 再描画（必要に応じ ann再生成）
-            try:
-                if self.data.ann_png_path and self.data.ann_png_path.exists():
-                    self.data.ann_png_path.unlink()
-                self.refresh_image()
-            except Exception:
-                pass
-
             self.requestRefresh.emit(self)
-            log.info("Saved: title='%s', json=%s", title, self.data.json_path.name)
         except Exception as e:
-            QtWidgets.QMessageBox.warning(self, "Save failed", f"{e}")
+            QtWidgets.QMessageBox.warning(self, "Save failed", str(e))
 
-    # --- Title 自動保存（フォーカス外れ/Enter） ---
     def _save_title_only(self):
-        title = self.title_edit.text().strip()
-        if not title or title == self.data.display_title:
+        t = self.title_edit.text().strip()
+        if not t or t == self.data.display_title:
             return
-        try:
-            meta = self.data.load_meta()
-            meta["display_title"] = title
-            self.data.display_title = title
-            self.data.save_meta(meta)
-            self.requestRefresh.emit(self)
-            log.info("AutoSaved (title): %s", title)
-        except Exception as e:
-            log.warning("AutoSave(title) Failed: %s", e)
-            self.title_edit.setText(self.data.display_title)
+        meta = self.data.load_meta()
+        meta["display_title"] = t
+        self.data.display_title = t
+        self.data.save_meta(meta)
+        self.requestRefresh.emit(self)
 
-    # --- Comment 自動保存（フォーカス外れ） ---
     def _save_comment_only(self):
-        text = self.comment_edit.toPlainText()
-        if text == self.data.comment:
+        txt = self.comment_edit.toPlainText()
+        if txt == self.data.comment:
             return
-        try:
-            meta = self.data.load_meta()
-            meta["comment"] = text
-            self.data.comment = text
-            self.data.save_meta(meta)
-            self.requestRefresh.emit(self)
-            log.info("AutoSaved (comment)")
-        except Exception as e:
-            log.warning("AutoSave(comment) Failed: %s", e)
+        meta = self.data.load_meta()
+        meta["comment"] = txt
+        self.data.comment = txt
+        self.data.save_meta(meta)
+        self.requestRefresh.emit(self)
 
-    # --- 削除 ---
     def _on_delete(self):
-        self.data.delete_files()
-        self.requestRemove.emit(self)
+        try:
+            self.data.delete_files()
+        finally:
+            # ★ UI から削除
+            self.requestRemove.emit(self)
 
 
+# ==================================================
+# Preview pane
+# ==================================================
 class PreviewPane(QtWidgets.QScrollArea):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -243,7 +312,7 @@ class PreviewPane(QtWidgets.QScrollArea):
 
         self.container = QtWidgets.QWidget()
         self.vbox = QtWidgets.QVBoxLayout(self.container)
-        self.vbox.setContentsMargins(8,8,8,8)
+        self.vbox.setContentsMargins(8, 8, 8, 8)
         self.vbox.setSpacing(12)
         self.vbox.addStretch(1)
 
@@ -254,39 +323,42 @@ class PreviewPane(QtWidgets.QScrollArea):
         w = CardWidget(cd, self)
         w.requestRemove.connect(self._on_remove_card)
         w.requestRefresh.connect(self._on_refresh_card)
-        self.vbox.insertWidget(self.vbox.count()-1, w)
+        self.vbox.insertWidget(self.vbox.count() - 1, w)
         self.cards.append(w)
 
     def add_capture(self, json_path: Path):
         try:
             meta = json.loads(json_path.read_text(encoding="utf-8"))
-        except Exception as e:
-            log.warning("メタ読込失敗: %s (%s)", json_path, e)
+        except Exception:
             return
+
         folder = json_path.parent
         img_name = meta.get("image_path") or json_path.with_suffix(".png").name
         comment = meta.get("comment", "") or ""
-        display_title = meta.get("display_title") or Path(img_name).stem  # ← 初回は PNG stem
+        display_title = meta.get("display_title") or Path(img_name).stem
 
-        cd = CardData(json_path=json_path,
-                      image_path=Path(img_name),
-                      folder=folder,
-                      comment=comment,
-                      display_title=display_title)
+        cd = CardData(
+            json_path=json_path,
+            image_path=Path(img_name),
+            folder=folder,
+            comment=comment,
+            display_title=display_title,
+        )
         self._add_card_widget(cd)
 
-    # signals
     def _on_remove_card(self, w: CardWidget):
         try:
             self.cards.remove(w)
         except ValueError:
             pass
-        w.setParent(None); w.deleteLater()
+        w.setParent(None)
+        w.deleteLater()
 
     def _on_refresh_card(self, _w: CardWidget):
         pass
 
     def clear_all(self):
         for w in list(self.cards):
-            w.setParent(None); w.deleteLater()
+            w.setParent(None)
+            w.deleteLater()
         self.cards.clear()

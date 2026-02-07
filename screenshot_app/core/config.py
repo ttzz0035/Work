@@ -1,16 +1,19 @@
-# core/config.py
 from __future__ import annotations
-from pathlib import Path
+
 import json
-from typing import Callable, Dict, Optional
+from pathlib import Path
+from typing import Callable, Dict
+
 from PySide6 import QtCore, QtGui, QtWidgets
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_FILE = ROOT / "config.json"
 
-# デフォルト割り当て
+# ==================================================
+# Defaults
+# ==================================================
 DEFAULT_KEYS: Dict[str, str] = {
-    "capture":         "Ctrl+Space",
+    "capture":         "Space",
     "add_rect":        "Ctrl+A",
     "remove_selected": "Delete",
     "pick_new_color":  "Ctrl+C",
@@ -21,47 +24,117 @@ DEFAULT_KEYS: Dict[str, str] = {
     "rec_play":        "Alt+3",
 }
 
+DEFAULT_TOOLBAR = {
+    "rect_color": "#FF3B30",
+    "rect_stroke": 2,
+}
+
+DEFAULT_UI = {
+    "toast_duration": 1.2,
+}
+
+DEFAULT_RECORD = {
+    "last_dir": "",
+}
+
+# ==================================================
+# Config
+# ==================================================
 class Config:
-    """アプリ全体設定（ホットキー中心）"""
+    """
+    アプリ恒久設定
+    - hotkeys
+    - toolbar (new rect defaults)
+    - ui (toast etc.)
+    - record (dialog defaults)
+    """
+
     def __init__(self):
         self.hotkeys: Dict[str, str] = dict(DEFAULT_KEYS)
+        self.toolbar: Dict[str, object] = dict(DEFAULT_TOOLBAR)
+        self.ui: Dict[str, object] = dict(DEFAULT_UI)
+        self.record: Dict[str, object] = dict(DEFAULT_RECORD)
 
-    def load(self):
-        if CONFIG_FILE.exists():
+    # ------------------------------
+    def load(self) -> None:
+        if not CONFIG_FILE.exists():
+            return
+
+        try:
+            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            return
+
+        if not isinstance(data, dict):
+            return
+
+        # --- hotkeys ---
+        hk = data.get("hotkeys")
+        if isinstance(hk, dict):
+            for k, v in hk.items():
+                if k in DEFAULT_KEYS:
+                    self.hotkeys[k] = str(v or "")
+
+        # --- toolbar ---
+        tb = data.get("toolbar")
+        if isinstance(tb, dict):
+            col = tb.get("rect_color")
+            if isinstance(col, str) and col.startswith("#"):
+                self.toolbar["rect_color"] = col
+
+            stroke = tb.get("rect_stroke")
             try:
-                data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-                if isinstance(data, dict):
-                    hk = data.get("hotkeys")
-                    if isinstance(hk, dict):
-                        # 既知キーのみ反映（未知キーは無視）
-                        for k, v in hk.items():
-                            if k in DEFAULT_KEYS:
-                                self.hotkeys[k] = str(v or "")
+                stroke_i = int(stroke)
+                if 1 <= stroke_i <= 20:
+                    self.toolbar["rect_stroke"] = stroke_i
             except Exception:
                 pass
 
-    def save(self):
+        # --- ui ---
+        ui = data.get("ui")
+        if isinstance(ui, dict):
+            td = ui.get("toast_duration")
+            try:
+                td_f = float(td)
+                if 0.1 <= td_f <= 10.0:
+                    self.ui["toast_duration"] = td_f
+            except Exception:
+                pass
+
+        # --- record ---
+        rec = data.get("record")
+        if isinstance(rec, dict):
+            ld = rec.get("last_dir")
+            if isinstance(ld, str):
+                self.record["last_dir"] = ld
+
+    # ------------------------------
+    def save(self) -> None:
         try:
+            data: Dict[str, object] = {}
             if CONFIG_FILE.exists():
                 try:
                     data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
                 except Exception:
                     data = {}
-            else:
-                data = {}
+
             data["hotkeys"] = self.hotkeys
-            CONFIG_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            data["toolbar"] = self.toolbar
+            data["ui"] = self.ui
+            data["record"] = self.record
+
+            CONFIG_FILE.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
         except Exception:
             pass
 
 
+# ==================================================
+# Hotkey manager
+# ==================================================
 class HotkeyManager(QtCore.QObject):
-    """
-    QShortcut を用いてホットキーを登録する簡易ラッパ。
-    - parent: ショートカットの親（通常は RegionWindow）
-    - actions: key -> callable
-    - conf: Config（hotkeys を参照）
-    """
     def __init__(self, parent: QtWidgets.QWidget, actions: Dict[str, Callable], conf: Config):
         super().__init__(parent)
         self.parent = parent
@@ -79,7 +152,6 @@ class HotkeyManager(QtCore.QObject):
         self._shortcuts.clear()
 
     def apply(self):
-        """設定（conf.hotkeys）を読み取り直してショートカットを張りなおす"""
         self.clear()
         for key_name, seq in self.conf.hotkeys.items():
             if not seq:
@@ -93,11 +165,12 @@ class HotkeyManager(QtCore.QObject):
                 sc.activated.connect(act)
                 self._shortcuts[key_name] = sc
             except Exception:
-                # キーが不正などの場合は無視
                 continue
 
 
-# 領域/矩形の最終状態（座標/サイズ/色）を保存・読込
+# ==================================================
+# Last region state (作業状態)
+# ==================================================
 STATE_FILE = ROOT / "last_state.json"
 
 def load_last_state() -> dict:
@@ -110,6 +183,9 @@ def load_last_state() -> dict:
 
 def save_last_state(data: dict) -> None:
     try:
-        STATE_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        STATE_FILE.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
     except Exception:
         pass
