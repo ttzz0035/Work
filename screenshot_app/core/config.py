@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Callable, Dict
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-ROOT = Path(__file__).resolve().parents[1]
+
+# ==================================================
+# Paths (EXE based)
+# ==================================================
+ROOT = Path(sys.executable).resolve().parent
 CONFIG_FILE = ROOT / "config.json"
+STATE_FILE  = ROOT / "last_state.json"
+
 
 # ==================================================
 # Defaults
@@ -36,6 +43,7 @@ DEFAULT_UI = {
 DEFAULT_RECORD = {
     "last_dir": "",
 }
+
 
 # ==================================================
 # Config
@@ -171,8 +179,6 @@ class HotkeyManager(QtCore.QObject):
 # ==================================================
 # Last region state (作業状態)
 # ==================================================
-STATE_FILE = ROOT / "last_state.json"
-
 def load_last_state() -> dict:
     if STATE_FILE.exists():
         try:
