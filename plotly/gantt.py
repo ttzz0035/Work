@@ -51,6 +51,8 @@ HOVER_RATIO_TEMPLATE = (
     "状態比率: %{customdata[5]:.1f}%"
 )
 
+# 色表示の初期値
+DEFAULT_STATE_CATEGORY = 0 
 
 # ============================================================
 # グラフ表示設定
@@ -231,24 +233,18 @@ def create_empty_figure(
 # FUXAから取得した状態がSTATE_COLOR_MAPへ登録されているか確認する。
 # ============================================================
 
-def validate_state_colors(
-    stack_items: list[dict],
-) -> None:
-    categories = {
-        str(item["category"])
-        for item in stack_items
-    }
-
-    undefined_categories = sorted(
-        categories - set(STATE_COLOR_MAP)
-    )
-
-    if undefined_categories:
-        raise ValueError(
-            "STATE_COLOR_MAPに未登録の状態があります: "
-            + ", ".join(undefined_categories)
-        )
-
+def validate_state_colors(stack_items: list[dict]) -> list[dict]:
+    validated_items = []
+    for item in stack_items:
+        category = str(item["category"])
+        if category not in STATE_COLOR_MAP:
+            # TODO:Loggerに置き換え
+            print(f"[WARNING]STATE_COLOR_MAP未登録状態を{DEFAULT_STATE_CATEGORY}として扱います: state={category}")
+            category = DEFAULT_STATE_CATEGORY
+        validated_item = item.copy()
+        validated_item["category"] = category
+        validated_items.append(validated_item)
+    return validated_items
 
 # ============================================================
 # バー内部表示文字生成
