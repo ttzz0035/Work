@@ -1,0 +1,255 @@
+REM ============================================================
+REM 認証方式
+REM JWT:     -H "x-access-token: YOUR_TOKEN"
+REM APIキー: -H "x-api-key: YOUR_API_KEY"
+REM ============================================================
+
+REM ============================================================
+REM System / Auth
+REM ============================================================
+
+REM GET /api/version - APIバージョン取得
+curl.exe -sS "http://127.0.0.1:1881/api/version"
+
+REM POST /api/signin - ログイン
+curl.exe -sS -X POST "http://127.0.0.1:1881/api/signin" -H "Content-Type: application/json" -d "{\"username\":\"admin\",\"password\":\"YOUR_PASSWORD\"}" | jq .
+
+REM POST /api/signin - JWTだけ取得
+curl.exe -sS -X POST "http://127.0.0.1:1881/api/signin" -H "Content-Type: application/json" -d "{\"username\":\"admin\",\"password\":\"YOUR_PASSWORD\"}" | jq -r ".data.token"
+
+REM POST /api/heartbeat - トークン更新・ハートビート
+curl.exe -sS -X POST "http://127.0.0.1:1881/api/heartbeat" -H "x-access-token: YOUR_TOKEN" -H "Content-Type: application/json" -d "{}" | jq .
+
+REM ============================================================
+REM Settings
+REM ============================================================
+
+REM GET /api/settings - サーバー設定取得
+curl.exe -sS "http://127.0.0.1:1881/api/settings" | jq .
+
+REM POST /api/settings - サーバー設定更新。settings.jsonには設定全体を格納
+curl.exe -i -X POST "http://127.0.0.1:1881/api/settings" -H "x-access-token: YOUR_TOKEN" -H "Content-Type: application/json" --data-binary "@settings.json"
+
+REM ============================================================
+REM Project / Device
+REM ============================================================
+
+REM GET /api/project - プロジェクト全体取得
+curl.exe -sS "http://127.0.0.1:1881/api/project" -H "x-access-token: YOUR_TOKEN" | jq .
+
+REM GET /api/project - プロジェクトをファイル保存
+curl.exe -sS "http://127.0.0.1:1881/api/project" -H "x-access-token: YOUR_TOKEN" -o project.json
+
+REM POST /api/project - プロジェクト全体保存
+curl.exe -i -X POST "http://127.0.0.1:1881/api/project" -H "x-access-token: YOUR_TOKEN" -H "Content-Type: application/json" --data-binary "@project.json"
+
+REM POST /api/projectData - プロジェクトの部分更新
+curl.exe -i -X POST "http://127.0.0.1:1881/api/projectData" -H "x-access-token: YOUR_TOKEN" -H "Content-Type: application/json" -d "{\"cmd\":\"PROJECT_COMMAND\",\"data\":{}}"
+
+REM GET /api/projectdemo - デモプロジェクト取得
+curl.exe -sS "http://127.0.0.1:1881/api/projectdemo" -H "x-access-token: YOUR_TOKEN" | jq .
+
+REM GET /api/device - デバイス情報取得
+curl.exe -sS -G "http://127.0.0.1:1881/api/device" -H "x-access-token: YOUR_TOKEN" --data-urlencode "id=DEVICE_ID" | jq .
+
+REM GET /api/device - id未指定
+curl.exe -sS "http://127.0.0.1:1881/api/device" -H "x-access-token: YOUR_TOKEN" | jq .
+
+REM POST /api/device - デバイス情報更新
+curl.exe -i -X POST "http://127.0.0.1:1881/api/device" -H "x-access-token: YOUR_TOKEN" -H "Content-Type: application/json" -d "{\"params\":{}}"
+
+REM ============================================================
+REM Upload
+REM ============================================================
+
+REM POST /api/upload - Base64リソースをアップロード
+curl.exe -sS -X POST "http://127.0.0.1:1881/api/upload" -H "x-access-token: YOUR_TOKEN" -H "Content-Type: application/json" -d "{\"destination\":\"images\",\"resource\":{\"name\":\"sample.png\",\"type\":\"image/png\",\"data\":\"data:image/png;base64,BASE64_DATA\"}}" | jq .
+
+REM ============================================================
+REM Users
+REM ============================================================
+
+REM GET /api/users - ユーザー一覧
+curl.exe -sS "http://127.0.0.1:1881/api/users" -H "x-access-token: YOUR_TOKEN" | jq .
+
+REM POST /api/users - ユーザー追加・更新
+curl.exe -i -X POST "http://127.0.0.1:1881/api/users" -H "x-access-token: YOUR_TOKEN" -H "Content-Type: application/json" -d "{\"params\":[]}"
+
+REM DELETE /api/users - ユーザー削除
+curl.exe -i -X DELETE -G "http://127.0.0.1:1881/api/users" -H "x-access-token: YOUR_TOKEN" --data-urlencode "param=USER_ID"
+
+REM ============================================================
+REM Roles
+REM ============================================================
+
+REM GET /api/roles - ロール一覧
+curl.exe -sS "http://127.0.0.1:1881/api/roles" -H "x-access-token: YOUR_TOKEN" | jq .
+
+REM POST /api/roles - ロール追加・更新
+curl.exe -i -X POST "http://127.0.0.1:1881/api/roles" -H "x-access-token: YOUR_TOKEN" -H "Content-Type: application/json" -d "{\"params\":[]}"
+
+REM DELETE /api/roles - ロール削除
+curl.exe -i -X DELETE -G "http://127.0.0.1:1881/api/roles" -H "x-access-token: YOUR_TOKEN" --data-urlencode "roles=[\"ROLE_ID\"]"
+
+REM ============================================================
+REM Alarms
+REM ============================================================
+
+REM GET /api/alarms - 現在のアラーム
+curl.exe -sS "http://127.0.0.1:1881/api/alarms" -H "x-access-token: YOUR_TOKEN" | jq .
+
+REM GET /api/alarms - フィルター指定
+curl.exe -sS -G "http://127.0.0.1:1881/api/alarms" -H "x-access-token: YOUR_TOKEN" --data-urlencode "filter={}" | jq .
+
+REM GET /api/alarmsHistory - アラーム履歴
+curl.exe -sS "http://127.0.0.1:1881/api/alarmsHistory" -H "x-access-token: YOUR_TOKEN" | jq .
+
+REM POST /api/alarmack - アラーム確認
+curl.exe -i -X POST "http://127.0.0.1:1881/api/alarmack" -H "x-access-token: YOUR_TOKEN" -H "Content-Type: application/json" -d "{\"params\":\"ALARM_ID\"}"
+
+REM POST /api/alarmsClear - アラーム消去
+curl.exe -i -X POST "http://127.0.0.1:1881/api/alarmsClear" -H "x-access-token: YOUR_TOKEN" -H "Content-Type: application/json" -d "{}"
+
+REM ============================================================
+REM Plugins
+REM ============================================================
+
+REM GET /api/plugins - プラグイン一覧
+curl.exe -sS "http://127.0.0.1:1881/api/plugins" -H "x-access-token: YOUR_TOKEN" | jq .
+
+REM POST /api/plugins - プラグインインストール
+curl.exe -i -X POST "http://127.0.0.1:1881/api/plugins" -H "x-access-token: YOUR_TOKEN" -H "Content-Type: application/json" -d "{\"params\":{}}"
+
+REM DELETE /api/plugins - プラグイン削除
+curl.exe -i -X DELETE -G "http://127.0.0.1:1881/api/plugins" -H "x-access-token: YOUR_TOKEN" --data-urlencode "param=PLUGIN_NAME"
+
+REM ============================================================
+REM Logs / Diagnose
+REM ============================================================
+
+REM GET /api/logsdir - ログファイル一覧
+curl.exe -sS "http://127.0.0.1:1881/api/logsdir" -H "x-access-token: YOUR_TOKEN" | jq .
+
+REM GET /api/logs - ログファイル取得
+curl.exe -sS -G "http://127.0.0.1:1881/api/logs" -H "x-access-token: YOUR_TOKEN" --data-urlencode "file=fuxa.log"
+
+REM GET /api/logs - ログをファイル保存
+curl.exe -sS -G "http://127.0.0.1:1881/api/logs" -H "x-access-token: YOUR_TOKEN" --data-urlencode "file=fuxa.log" -o fuxa.log
+
+REM GET /api/reportsdir - 指定プレフィックスのレポート一覧
+curl.exe -sS -G "http://127.0.0.1:1881/api/reportsdir" -H "x-access-token: YOUR_TOKEN" --data-urlencode "name=REPORT_NAME" | jq .
+
+REM POST /api/sendmail - メール送信テスト
+curl.exe -i -X POST "http://127.0.0.1:1881/api/sendmail" -H "x-access-token: YOUR_TOKEN" -H "Content-Type: application/json" -d "{\"params\":{\"msg\":{\"from\":\"sender@example.com\",\"to\":\"receiver@example.com\",\"subject\":\"FUxA test\",\"text\":\"test\"},\"smtp\":{\"host\":\"smtp.example.com\",\"port\":587,\"username\":\"SMTP_USER\",\"password\":\"SMTP_PASSWORD\"}}}"
+
+REM ============================================================
+REM Resources
+REM ============================================================
+
+REM GET /api/resources/images - 画像一覧
+curl.exe -sS "http://127.0.0.1:1881/api/resources/images" -H "x-access-token: YOUR_TOKEN" | jq .
+
+REM GET /api/resources/resources - リソース一覧
+curl.exe -sS "http://127.0.0.1:1881/api/resources/resources" -H "x-access-token: YOUR_TOKEN" | jq .
+
+REM POST /api/resources/remove - リソース削除
+curl.exe -i -X POST "http://127.0.0.1:1881/api/resources/remove" -H "x-access-token: YOUR_TOKEN" -H "Content-Type: application/json" -d "{\"file\":\"RESOURCE_PATH\"}"
+
+REM GET /api/resources/generateImage - チャート画像生成
+curl.exe -sS -G "http://127.0.0.1:1881/api/resources/generateImage" -H "x-access-token: YOUR_TOKEN" --data-urlencode "param={}" -o generated-image.txt
+
+REM GET /api/resources/templates - テンプレート一覧
+curl.exe -sS "http://127.0.0.1:1881/api/resources/templates" -H "x-access-token: YOUR_TOKEN" | jq .
+
+REM POST /api/resources/template - テンプレート追加・更新
+curl.exe -i -X POST "http://127.0.0.1:1881/api/resources/template" -H "x-access-token: YOUR_TOKEN" -H "Content-Type: application/json" -d "{\"template\":{}}"
+
+REM DELETE /api/resources/templates - テンプレート削除
+curl.exe -i -X DELETE -G "http://127.0.0.1:1881/api/resources/templates" -H "x-access-token: YOUR_TOKEN" --data-urlencode "templates=[\"TEMPLATE_ID\"]"
+
+REM GET /api/resources/widgets - ウィジェット一覧
+curl.exe -sS "http://127.0.0.1:1881/api/resources/widgets" -H "x-access-token: YOUR_TOKEN" | jq .
+
+REM POST /api/resources/removeWidget - ウィジェット削除
+curl.exe -sS -X POST "http://127.0.0.1:1881/api/resources/removeWidget" -H "x-access-token: YOUR_TOKEN" -H "Content-Type: application/json" -d "{\"path\":\"WIDGET_PATH\"}" | jq .
+
+REM ============================================================
+REM DAQ / Historian
+REM ============================================================
+
+REM GET /api/daq - タグ履歴取得
+curl.exe -sS -G "http://127.0.0.1:1881/api/daq" -H "x-access-token: YOUR_TOKEN" --data-urlencode "query={\"from\":\"FROM_TIMESTAMP\",\"to\":\"TO_TIMESTAMP\",\"sids\":[\"TAG_ID_1\",\"TAG_ID_2\"]}" | jq .
+
+REM ============================================================
+REM Scheduler
+REM ============================================================
+
+REM GET /api/scheduler - スケジュール取得
+curl.exe -sS -G "http://127.0.0.1:1881/api/scheduler" -H "x-access-token: YOUR_TOKEN" --data-urlencode "id=SCHEDULER_ID" | jq .
+
+REM POST /api/scheduler - スケジュール保存
+curl.exe -sS -X POST "http://127.0.0.1:1881/api/scheduler" -H "x-access-token: YOUR_TOKEN" -H "Content-Type: application/json" -d "{\"id\":\"SCHEDULER_ID\",\"data\":{\"schedules\":{},\"settings\":{\"devices\":[]}}}" | jq .
+
+REM DELETE /api/scheduler - スケジュール削除
+curl.exe -sS -X DELETE -G "http://127.0.0.1:1881/api/scheduler" -H "x-access-token: YOUR_TOKEN" --data-urlencode "id=SCHEDULER_ID" | jq .
+
+REM ============================================================
+REM Scripts
+REM ============================================================
+
+REM POST /api/runscript - FUxAスクリプト実行
+curl.exe -sS -X POST "http://127.0.0.1:1881/api/runscript" -H "x-access-token: YOUR_TOKEN" -H "Content-Type: application/json" -d "{}" | jq .
+
+REM POST /api/runSysFunction - サーバーシステム関数実行
+curl.exe -sS -X POST "http://127.0.0.1:1881/api/runSysFunction" -H "x-access-token: YOUR_TOKEN" -H "Content-Type: application/json" -d "{}" | jq .
+
+REM ============================================================
+REM Tags
+REM ============================================================
+
+REM GET /api/getTagValue - 1タグ取得
+curl.exe -sS -G "http://127.0.0.1:1881/api/getTagValue" -H "x-access-token: YOUR_TOKEN" --data-urlencode "ids=[\"TAG_ID_1\"]" | jq .
+
+REM GET /api/getTagValue - 複数タグ取得
+curl.exe -sS -G "http://127.0.0.1:1881/api/getTagValue" -H "x-access-token: YOUR_TOKEN" --data-urlencode "ids=[\"TAG_ID_1\",\"TAG_ID_2\"]" | jq .
+
+REM GET /api/getTagValue - sourceScriptName指定
+curl.exe -sS -G "http://127.0.0.1:1881/api/getTagValue" -H "x-access-token: YOUR_TOKEN" --data-urlencode "ids=[\"TAG_ID_1\"]" --data-urlencode "sourceScriptName=SCRIPT_NAME" | jq .
+
+REM POST /api/setTagValue - 1タグ書込み
+curl.exe -i -X POST "http://127.0.0.1:1881/api/setTagValue" -H "x-access-token: YOUR_TOKEN" -H "Content-Type: application/json" -d "{\"tags\":[{\"id\":\"TAG_ID_1\",\"value\":123}]}"
+
+REM POST /api/setTagValue - 複数タグ書込み
+curl.exe -i -X POST "http://127.0.0.1:1881/api/setTagValue" -H "x-access-token: YOUR_TOKEN" -H "Content-Type: application/json" -d "{\"tags\":[{\"id\":\"TAG_ID_1\",\"value\":123},{\"id\":\"TAG_ID_2\",\"value\":true},{\"id\":\"TAG_ID_3\",\"value\":\"RUN\"}]}"
+
+REM ============================================================
+REM Reports
+REM ============================================================
+
+REM GET /api/reportsQuery - レポート検索
+curl.exe -sS -G "http://127.0.0.1:1881/api/reportsQuery" -H "x-access-token: YOUR_TOKEN" --data-urlencode "query={\"name\":\"REPORT_NAME\",\"count\":20}" | jq .
+
+REM POST /api/reportBuild - レポートを強制生成
+curl.exe -i -X POST "http://127.0.0.1:1881/api/reportBuild" -H "x-access-token: YOUR_TOKEN" -H "Content-Type: application/json" -d "{}"
+
+REM POST /api/reportRemoveFile - レポートファイル削除
+curl.exe -i -X POST "http://127.0.0.1:1881/api/reportRemoveFile" -H "x-access-token: YOUR_TOKEN" -H "Content-Type: application/json" -d "{}"
+
+REM GET /api/download - レポートダウンロード
+curl.exe -sS -G "http://127.0.0.1:1881/api/download" -H "x-access-token: YOUR_TOKEN" --data-urlencode "cmd=REPORT-DOWNLOAD" --data-urlencode "name=REPORT_FILE_NAME" -o report-output.bin
+
+REM ============================================================
+REM API Keys
+REM ============================================================
+
+REM GET /api/apikeys - APIキー一覧
+curl.exe -sS "http://127.0.0.1:1881/api/apikeys" -H "x-access-token: YOUR_TOKEN" | jq .
+
+REM POST /api/apikeys - APIキー追加・更新
+curl.exe -i -X POST "http://127.0.0.1:1881/api/apikeys" -H "x-access-token: YOUR_TOKEN" -H "Content-Type: application/json" -d "{\"params\":[{\"id\":\"integration-key\",\"key\":\"YOUR_API_KEY\",\"enabled\":true,\"expires\":\"\"}]}"
+
+REM DELETE /api/apikeys - APIキー削除
+curl.exe -i -X DELETE -G "http://127.0.0.1:1881/api/apikeys" -H "x-access-token: YOUR_TOKEN" --data-urlencode "apikeys=[\"integration-key\"]"
+
+REM APIキーを使ったタグ取得例
+curl.exe -sS -G "http://127.0.0.1:1881/api/getTagValue" -H "x-api-key: YOUR_API_KEY" --data-urlencode "ids=[\"TAG_ID_1\"]" | jq .
