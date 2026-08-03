@@ -236,8 +236,9 @@ def create_empty_figure(
 def validate_state_colors(stack_items: list[dict]) -> list[dict]:
     validated_items = []
     for item in stack_items:
-        category = str(item["category"])
-        if category not in STATE_COLOR_MAP:
+        source_category = item.get("category")
+        category = DEFAULT_STATE_CATEGORY if source_category is None else str(source_category)
+        if source_category is None or category not in STATE_COLOR_MAP:
             # TODO:Loggerに置き換え
             print(f"[WARNING]STATE_COLOR_MAP未登録状態を{DEFAULT_STATE_CATEGORY}として扱います: state={category}")
             category = DEFAULT_STATE_CATEGORY
