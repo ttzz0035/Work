@@ -1,55 +1,33 @@
 from __future__ import annotations
 
-import json
-from datetime import datetime, timedelta
+from datetime import datetime
 
-import requests
 from dash import Dash, Input, Output, dcc, html
 
-from plotly.gantt import create_figure
+from fuxa_client import get_daq_history
+from gantt import create_figure
 
 
 # ============================================================
-# FUXA接続設定
+# FUXAタグ設定
 # ============================================================
-
-# FUXAのHTTP API
-FUXA_URL = "http://127.0.0.1:1881"
 
 # ガントチャートとして表示するDAQタグ
 FUXA_TAG_ID = "t_2b7faf71-ae894970"
 
 
 # ============================================================
-# 表示範囲モード
+# 表示範囲設定
+#
+# YYYY-MM-DD HH:MM:SS形式で指定する。
+# Dashサーバーが動作しているOSのローカルtimezoneとして扱う。
 # ============================================================
 
-# 現在時刻を終点として、直近N時間を表示する
-DISPLAY_MODE_ROLLING = 0
+# FUXAから取得する開始日時
+DISPLAY_START = "2026-08-03 13:00:00"
 
-# 今日の0:00を始点として、N時間分を表示する
-DISPLAY_MODE_DAILY = 1
-
-# 今週月曜日の0:00を始点として、N週間分を表示する
-DISPLAY_MODE_WEEKLY = 2
-
-
-# ============================================================
-# 現在使用する表示設定
-# ============================================================
-
-# DAILY + 24の場合:
-# 今日の0:00から翌日の0:00までを表示する
-DISPLAY_MODE = DISPLAY_MODE_DAILY
-DISPLAY_RANGE = 24
-
-
-# ============================================================
-# 将来FUXAタグから表示設定を取得する場合のタグ
-# ============================================================
-
-# FUXA_DISPLAY_MODE_TAG_ID = "表示モードタグID"
-# FUXA_DISPLAY_RANGE_TAG_ID = "表示範囲タグID"
+# FUXAから取得する終了日時
+DISPLAY_END = "2026-08-03 13:30:00"
 
 
 # ============================================================
@@ -85,6 +63,10 @@ app.index_string = """
                 padding: 0;
                 overflow: hidden;
             }
+
+            * {
+                box-sizing: border-box;
+            }
         </style>
     </head>
     <body>
@@ -116,62 +98,27 @@ app.index_string = """
 
 
 # ============================================================
-# 表示設定取得
+# 表示開始時刻・終了時刻取得
 #
-# 現在は固定値を返す。
-# 将来はこの関数内だけを変更し、FUXAタグから取得する。
-# ============================================================
-
-def get_display_settings() -> tuple[int, int]:
-    return DISPLAY_MODE, DISPLAY_RANGE
-
-
-# ============================================================
-# 表示開始時刻・終了時刻生成
-#
-# modeとrangeを基に、DAQ取得範囲とX軸表示範囲を生成する。
+# DISPLAY_STARTとDISPLAY_ENDをdatetimeへ変換する。
+# timezoneを含まない文字列はOSのローカルtimezoneとして扱う。
 # ============================================================
 
 def get_display_range() -> tuple[datetime, datetime]:
-    mode, display_range = get_display_settings()
-    now = datetime.now().astimezone()
+    start = datetime.fromisoformat(
+        DISPLAY_START
+    ).astimezone()
 
-    # 現在時刻から直近N時間
-    if mode == DISPLAY_MODE_ROLLING:
-        end = now
-        start = end - timedelta(hours=display_range)
+    end = datetime.fromisoformat(
+        DISPLAY_END
+    ).astimezone()
 
-        return start, end
-
-    # 今日の0:00からN時間
-    if mode == DISPLAY_MODE_DAILY:
-        start = now.replace(
-            hour=0,
-            minute=0,
-            second=0,
-            microsecond=0,
+    if start >= end:
+        raise ValueError(
+            "DISPLAY_STARTはDISPLAY_ENDより前にしてください。"
         )
-        end = start + timedelta(hours=display_range)
 
-        return start, end
-
-    # 今週月曜日の0:00からN週間
-    if mode == DISPLAY_MODE_WEEKLY:
-        start = (
-            now - timedelta(days=now.weekday())
-        ).replace(
-            hour=0,
-            minute=0,
-            second=0,
-            microsecond=0,
-        )
-        end = start + timedelta(weeks=display_range)
-
-        return start, end
-
-    raise ValueError(
-        f"未対応の表示モードです: {mode}"
-    )
+    return start, end
 
 
 # ============================================================
@@ -191,28 +138,16 @@ def get_stack_items(
     start: datetime,
     end: datetime,
 ) -> list[dict]:
-    query = {
-        "sids": [
+    histories = get_daq_history(
+        [
             FUXA_TAG_ID,
         ],
-        "from": int(start.timestamp() * 1000),
-        "to": int(end.timestamp() * 1000),
-    }
-
-    response = requests.get(
-        f"{FUXA_URL}/api/daq",
-        params={
-            "query": json.dumps(
-                query,
-                separators=(",", ":"),
-            ),
-        },
-        timeout=10,
+        start,
+        end,
     )
-    response.raise_for_status()
 
-    # sidsを1件だけ指定しているため、先頭の配列を取得する
-    history = response.json()[0]
+    # タグIDを1件だけ指定しているため、対象タグの履歴を取得する
+    history = histories[FUXA_TAG_ID]
 
     if not history:
         return []
@@ -314,8 +249,8 @@ app.layout = html.Div(
 # ============================================================
 # グラフ更新
 #
-# 表示範囲を計算し、FUXAからDAQ履歴を取得して、
-# PlotlyのFigureを再生成する。
+# 定数で指定した表示範囲を使用してFUXAからDAQ履歴を取得し、
+# PlotlyのFigureを1秒ごとに再生成する。
 # ============================================================
 
 @app.callback(
