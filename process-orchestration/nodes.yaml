@@ -1,0 +1,32 @@
+manager:
+  api: http://localhost:8080
+  executable: process-compose
+  cache: process-compose.yaml
+  request_timeout: 3
+  tui: true # TUI画面表示/非表示
+
+nodes:
+  XXX:
+    enabled: true
+    executable: python
+    file: worker.py
+    parameters:
+      interval: 1000
+      mode: collect
+
+  YYY:
+    enabled: true
+    executable: python
+    file: worker.py
+    parameters:
+      interval: 500
+      mode: monitor
+
+  ZZZ:
+    enabled: true
+    executable: python
+    file: worker.py
+    parameters:
+      interval: 500
+      mode: monitor
+
