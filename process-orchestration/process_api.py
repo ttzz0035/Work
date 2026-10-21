@@ -6,68 +6,68 @@ from urllib.parse import quote
 
 
 class ProcessComposeAPI:
-    """Process Compose REST APIへの通信を担当する。"""
+    """Process ComposeのREST API通信のみを担当する。"""
 
     def __init__(self, config):
-        # 接続設定はProcessConfigから参照する。
+        # API接続先やタイムアウトなどの設定を保持する。
         self.config = config
 
     def request(self, method, path, payload=None):
-        """HTTPリクエストを実行し、レスポンスをJSONとして返す。"""
-        headers = {}
+        """指定されたHTTPメソッドでProcess Compose APIを呼び出す。"""
 
-        # APIトークン認証が設定されている場合に使用する。
+        # 環境変数にAPIトークンがある場合のみ認証ヘッダーを設定する。
+        headers = {}
         if token := os.getenv("PC_API_TOKEN"):
             headers["X-PC-Token-Key"] = token
 
-        body = None
-
-        # POST/PATCHなどのJSONリクエストを生成する。
-        if payload is not None:
+        # リクエストデータがある場合はJSON形式に変換する。
+        body = json.dumps(payload).encode("utf-8") if payload is not None else None
+        if body is not None:
             headers["Content-Type"] = "application/json"
-            body = json.dumps(payload).encode("utf-8")
 
+        # 設定されたAPI接続先とエンドポイントからURLを生成する。
         url = self.config.cfg.get("api", "http://localhost:8080").rstrip("/") + path
         req = request.Request(url, data=body, headers=headers, method=method)
 
         try:
+            # APIを呼び出し、JSONレスポンスをPythonオブジェクトへ変換する。
             with request.urlopen(req, timeout=self.config.cfg.get("request_timeout", 3)) as response:
                 raw = response.read()
                 return json.loads(raw) if raw else {}
-
         except error.HTTPError as exc:
-            message = exc.read().decode(errors="replace")
-            raise RuntimeError(f"HTTP {exc.code}: {message}") from exc
+            # HTTPエラーにはステータスコードとレスポンス本文を含める。
+            raise RuntimeError(f"HTTP {exc.code}: {exc.read().decode(errors='replace')}") from exc
 
     def states(self):
-        """全Nodeの名前と実行状態を取得する。"""
-        result = self.request("GET", "/processes")
+        """登録されている全Nodeの実行状態を取得する。"""
 
-        return {
-            process["name"]: process["status"]
-            for process in result["data"]
-            if process.get("name")
-        }
+        # プロセス名をキー、実行状態を値とする辞書を返す。
+        result = self.request("GET", "/processes")
+        return {p["name"]: p["status"] for p in result["data"] if p.get("name")}
 
     def process_info(self, name):
-        """指定Nodeの登録済み設定を取得する。"""
+        """指定Nodeの詳細情報を取得する。"""
         return self.request("GET", f"/process/info/{quote(name, safe='')}")
 
+    def process_logs(self, name):
+        """指定Nodeのログを取得する。"""
+
+        # UI表示用ログも通常ログと同じエンドポイントから取得する。
+        result = self.request("GET", f"/process/logs/{quote(name, safe='')}/0/0")
+        return result["logs"]
+
     def update_project(self, processes):
-        """複数Nodeの定義をProjectへ一括適用する。"""
-        return self.request("POST", "/project", {
-            "version": "0.5",
-            "processes": processes,
-        })
+        """Process Composeのプロジェクト定義を更新する。"""
+        return self.request("POST", "/project", {"version": "0.5", "processes": processes})
 
     def start_node(self, name):
-        """登録済みNodeを起動する。"""
+        """指定Nodeを起動する。"""
         return self.request("POST", f"/process/start/{quote(name, safe='')}")
 
     def stop_node(self, name):
-        """実行中Nodeを停止する。"""
+        """指定Nodeを停止する。"""
         return self.request("PATCH", f"/process/stop/{quote(name, safe='')}")
 
     def restart_node(self, name):
-        """登録済みNodeを再起動する。"""
+        """指定Nodeを再起動する。"""
         return self.request("POST", f"/process/restart/{quote(name, safe='')}")

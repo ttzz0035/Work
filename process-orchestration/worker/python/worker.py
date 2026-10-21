@@ -11,6 +11,9 @@ import yaml
 BASE = Path(__file__).resolve().parents[2]
 TASKS_DIR = BASE / "tasks"
 
+# プロジェクト共通モジュールをTaskから参照できるようにする。
+if str(BASE) not in sys.path:
+    sys.path.insert(0, str(BASE))
 
 class Worker:
     """Node設定に従ってTaskを読み込み、実行する。"""

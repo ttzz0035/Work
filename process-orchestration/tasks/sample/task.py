@@ -1,34 +1,56 @@
 
-class Task:
-    """Workerから呼び出される業務処理。単独デバッグにも対応する。"""
+import math
+import time
 
-    def __init__(self):
-        self.running = False
+from ui_log import UILayout, UIValue, UIProgress, UIStatus, emit_ui
+
+
+class Task:
+    """共通UI Schemaに従って表示データを定期更新するサンプルTask。"""
 
     def run(self, config):
-        """Workerと単独デバッグで共通の実行入口。"""
-        self.running = True
+        interval = config.get("interval", 1000) / 1000
+        if interval <= 0:
+            raise ValueError("interval must be positive")
 
-        try:
-            print(f"[TASK CONFIG] {config}", flush=True)
+        # Dashboardのグリッドを2列に設定する。
+        emit_ui(UILayout(columns=2))
 
-            # -----------------------
-            # 業務処理はここに実装する。
-            # -----------------------
-            print(f"Mode: {config.get('mode')}", flush=True)
-            print(f"Interval: {config.get('interval')}", flush=True)
+        # 初回のみUIカードを定義・生成する。
+        emit_ui(UIValue(
+            id="temperature", label="Temperature",
+            unit="°C", row=0, column=0
+        ))
+        emit_ui(UIValue(
+            id="pressure", label="Pressure",
+            unit="kPa", row=0, column=1
+        ))
+        emit_ui(UIProgress(
+            id="progress", label="Progress",
+            row=1, column=0, columnspan=2
+        ))
+        emit_ui(UIStatus(
+            id="connection", label="Connection",
+            row=2, column=0, columnspan=2
+        ))
 
-        finally:
-            self.running = False
+        count = 0
+
+        while True:
+            # サンプルの測定値を生成する。
+            temperature = round(25 + math.sin(count / 5) * 3, 1)
+            pressure = round(101.3 + math.cos(count / 7) * 2, 1)
+            progress = (count * 5) % 101
+
+            # IDを指定して既存カードの値のみ更新する。
+            emit_ui(UIValue(id="temperature", value=temperature))
+            emit_ui(UIValue(id="pressure", value=pressure))
+            emit_ui(UIProgress(id="progress", value=progress))
+            emit_ui(UIStatus(id="connection", value="Connected"))
+
+            count += 1
+            time.sleep(interval)
 
 
 if __name__ == "__main__":
-    # VS CodeからF5で単独デバッグする。
-    # WorkerやProcess Composeの起動は不要。
-    DEBUG_CONFIG = {
-        "task": "sample",
-        "interval": 1000,
-        "mode": "collect",
-    }
-
-    Task().run(DEBUG_CONFIG)
+    Task().run({"interval": 1000})
