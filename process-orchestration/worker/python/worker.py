@@ -15,12 +15,14 @@ TASKS_DIR = BASE / "tasks"
 if str(BASE) not in sys.path:
     sys.path.insert(0, str(BASE))
 
+
 class Worker:
     """Node設定に従ってTaskを読み込み、実行する。"""
 
-    def __init__(self, config_path=None, key=None, config=None, task=None):
+    def __init__(self, config_path=None, key=None, config=None, task=None, node_name=None):
         self.config_path = Path(config_path).resolve() if config_path else None
         self.key = key
+        self.node_name = node_name
 
         # Compose起動とPython直接起動の設定方法を分離する。
         if config is not None:
@@ -28,9 +30,13 @@ class Worker:
                 raise ValueError("Specify config or config_path/key, not both")
             if not isinstance(config, dict) or not isinstance(task, str) or not task:
                 raise ValueError("config and task are required")
+            if not isinstance(node_name, str) or not node_name:
+                raise ValueError("node_name is required")
             self.config = config
             self.task_name = task
         else:
+            if node_name is not None:
+                raise ValueError("node_name is determined by configuration key")
             if self.config_path is None or not self.key:
                 raise ValueError("config_path and key are required")
             self.config = self.load_config()
@@ -42,8 +48,11 @@ class Worker:
 
         # 既存のnodes.XXX.parametersから親Nodeを特定する。
         parts = self.key.split(".")
-        if len(parts) != 3 or parts[0] != "nodes" or parts[2] != "parameters":
+        if len(parts) != 3 or parts[0] != "nodes" or parts[2] != "parameters" or not parts[1]:
             raise ValueError(f"Invalid configuration key: {self.key}")
+
+        # 親キーをNode名として保持する。
+        self.node_name = parts[1]
 
         for part in parts[:2]:
             if not isinstance(data, dict) or part not in data:
@@ -91,13 +100,14 @@ class Worker:
     def run(self):
         """設定されたTaskを実行する。"""
         print(f"[KEY] {self.key}", flush=True)
+        print(f"[NODE] {self.node_name}", flush=True)
         print(f"[TASK] {self.task_name}", flush=True)
         print(f"[CONFIG] {self.config}", flush=True)
 
         task = self.load_task(self.task_name)
 
         print(f"[TASK START] {self.task_name}", flush=True)
-        task.run(self.config)
+        task.run(self.config, self.node_name)
         print(f"[TASK END] {self.task_name}", flush=True)
 
 
@@ -114,11 +124,12 @@ if __name__ == "__main__":
     else:
         # VS Codeから引数なしで直接デバッグする。
         DEBUG_TASK = "sample"
+        DEBUG_NODE = "DEBUG"
         DEBUG_CONFIG = {
             "interval": 1000,
             "mode": "collect",
         }
 
-        worker = Worker(config=DEBUG_CONFIG, task=DEBUG_TASK)
+        worker = Worker(config=DEBUG_CONFIG, task=DEBUG_TASK, node_name=DEBUG_NODE)
 
     worker.run()

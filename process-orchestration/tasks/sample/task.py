@@ -16,7 +16,10 @@ from ui_log import UILamp, UILayout, UIProgress, UIValue, emit_ui
 class Task:
     """共通UI Schemaに従って表示データを定期更新するサンプルTask。"""
 
-    def run(self, config):
+    def run(self, config, node_name):
+        # Workerから渡されたNode名を取得する。
+        print(f"[NODE] {node_name}", flush=True)
+
         interval = config.get("interval", 1000) / 1000
         if interval <= 0:
             raise ValueError("interval must be positive")
@@ -70,4 +73,4 @@ class Task:
 
 
 if __name__ == "__main__":
-    Task().run({"interval": 1000})
+    Task().run({"interval": 1000}, "DEBUG")
