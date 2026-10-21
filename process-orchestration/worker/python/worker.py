@@ -123,13 +123,12 @@ if __name__ == "__main__":
 
     else:
         # VS Codeから引数なしで直接デバッグする。
-        DEBUG_TASK = "sample"
-        DEBUG_NODE = "DEBUG"
-        DEBUG_CONFIG = {
-            "interval": 1000,
-            "mode": "collect",
-        }
+        DEBUG_NODE = "XXX"
 
-        worker = Worker(config=DEBUG_CONFIG, task=DEBUG_TASK, node_name=DEBUG_NODE)
+        # nodes.yamlから指定Nodeの設定を取得する。
+        with open(BASE / "nodes.yaml", "r", encoding="utf-8") as f:
+            node = yaml.safe_load(f)["nodes"][DEBUG_NODE]
+
+        worker = Worker(config=node["parameters"], task=node["task"], node_name=DEBUG_NODE)
 
     worker.run()

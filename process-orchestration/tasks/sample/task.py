@@ -72,5 +72,16 @@ class Task:
             time.sleep(interval)
 
 
+
 if __name__ == "__main__":
-    Task().run({"interval": 1000}, "DEBUG")
+    import yaml
+
+    # VS CodeからTaskを直接デバッグする。
+    DEBUG_NODE = "XXX"
+
+    # nodes.yamlから指定Nodeの設定を取得する。
+    with open(BASE / "nodes.yaml", "r", encoding="utf-8") as f:
+        node = yaml.safe_load(f)["nodes"][DEBUG_NODE]
+
+    # Workerから呼び出す場合と同じ引数で実行する。
+    Task().run(node["parameters"], DEBUG_NODE)
