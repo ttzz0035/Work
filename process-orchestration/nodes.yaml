@@ -7,6 +7,7 @@ manager:
 
 nodes:
   XXX:
+    task: sample
     enabled: true
     executable: python
     file: worker.py
@@ -15,6 +16,7 @@ nodes:
       mode: collect
 
   YYY:
+    task: sample
     enabled: true
     executable: python
     file: worker.py
@@ -23,6 +25,7 @@ nodes:
       mode: monitor
 
   ZZZ:
+    task: sample
     enabled: true
     executable: python
     file: worker.py

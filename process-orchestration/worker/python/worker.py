@@ -8,47 +8,58 @@ from pathlib import Path
 import yaml
 
 
-# プロジェクトのルートディレクトリ。
 BASE = Path(__file__).resolve().parents[2]
 TASKS_DIR = BASE / "tasks"
 
 
 class Worker:
-    """設定の取得とTaskの読み込み・実行を担当する。"""
+    """Node設定に従ってTaskを読み込み、実行する。"""
 
-    def __init__(self, config_path=None, key=None, config=None):
+    def __init__(self, config_path=None, key=None, config=None, task=None):
         self.config_path = Path(config_path).resolve() if config_path else None
         self.key = key
 
-        # 通常実行ではYAMLを読み込み、デバッグでは辞書を直接受け取る。
+        # Compose起動とPython直接起動の設定方法を分離する。
         if config is not None:
             if config_path is not None or key is not None:
                 raise ValueError("Specify config or config_path/key, not both")
-            if not isinstance(config, dict):
-                raise TypeError("config must be a dictionary")
+            if not isinstance(config, dict) or not isinstance(task, str) or not task:
+                raise ValueError("config and task are required")
             self.config = config
+            self.task_name = task
         else:
             if self.config_path is None or not self.key:
                 raise ValueError("config_path and key are required")
             self.config = self.load_config()
 
     def load_config(self):
-        """Composeから指定されたYAMLの設定キーを読み出す。"""
+        """Node直下のtaskとparametersを読み込む。"""
         with self.config_path.open("r", encoding="utf-8") as file:
             data = yaml.safe_load(file)
 
-        for part in self.key.split("."):
+        # 既存のnodes.XXX.parametersから親Nodeを特定する。
+        parts = self.key.split(".")
+        if len(parts) != 3 or parts[0] != "nodes" or parts[2] != "parameters":
+            raise ValueError(f"Invalid configuration key: {self.key}")
+
+        for part in parts[:2]:
             if not isinstance(data, dict) or part not in data:
                 raise KeyError(f"Configuration key not found: {self.key}")
             data = data[part]
 
         if not isinstance(data, dict):
-            raise ValueError(f"Configuration must be a dictionary: {self.key}")
+            raise ValueError(f"Invalid node configuration: {self.key}")
 
-        return data
+        self.task_name = data["task"]
+        parameters = data["parameters"]
+
+        if not isinstance(parameters, dict):
+            raise ValueError(f"Invalid parameters: {self.key}")
+
+        return parameters
 
     def load_task(self, task_name):
-        """tasks/<task_name>/task.pyからTaskクラスを読み込む。"""
+        """tasks/<task名>/task.pyからTaskクラスを読み込む。"""
         if not isinstance(task_name, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", task_name):
             raise ValueError(f"Invalid task name: {task_name}")
 
@@ -57,11 +68,8 @@ class Worker:
         if not task_file.is_file():
             raise FileNotFoundError(f"Task not found: {task_file}")
 
-        # Taskファイルを動的に読み込む。
-        spec = importlib.util.spec_from_file_location(
-            f"worker_task_{task_name}",
-            task_file,
-        )
+        # Taskモジュールを動的ロードする。
+        spec = importlib.util.spec_from_file_location(f"worker_task_{task_name}", task_file)
 
         if spec is None or spec.loader is None:
             raise ImportError(f"Cannot load task: {task_name}")
@@ -70,7 +78,6 @@ class Worker:
         sys.modules[spec.name] = module
         spec.loader.exec_module(module)
 
-        # 全Taskの公開インターフェースはTask.run(config)に統一する。
         task_class = getattr(module, "Task", None)
 
         if not isinstance(task_class, type):
@@ -79,26 +86,21 @@ class Worker:
         return task_class()
 
     def run(self):
-        """通常実行と単独デバッグで共通のTask実行処理。"""
+        """設定されたTaskを実行する。"""
         print(f"[KEY] {self.key}", flush=True)
+        print(f"[TASK] {self.task_name}", flush=True)
         print(f"[CONFIG] {self.config}", flush=True)
 
-        # 設定から実行するTaskを決定する。
-        task_name = self.config["task"]
-        task = self.load_task(task_name)
+        task = self.load_task(self.task_name)
 
-        print(f"[TASK START] {task_name}", flush=True)
-
-        # Task側に業務処理を委譲する。
+        print(f"[TASK START] {self.task_name}", flush=True)
         task.run(self.config)
-
-        print(f"[TASK END] {task_name}", flush=True)
+        print(f"[TASK END] {self.task_name}", flush=True)
 
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
-        # Process Composeから起動する場合。
-        # python worker.py --config nodes.yaml --key nodes.XSASA.parameters
+        # Process Composeからの既存引数起動。
         parser = argparse.ArgumentParser()
         parser.add_argument("--config", required=True)
         parser.add_argument("--key", required=True)
@@ -107,14 +109,13 @@ if __name__ == "__main__":
         worker = Worker(config_path=args.config, key=args.key)
 
     else:
-        # VS CodeからF5で起動する場合。
-        # コマンドライン引数やProcess Composeは不要。
+        # VS Codeから引数なしで直接デバッグする。
+        DEBUG_TASK = "sample"
         DEBUG_CONFIG = {
-            "task": "sample",
             "interval": 1000,
             "mode": "collect",
         }
 
-        worker = Worker(config=DEBUG_CONFIG)
+        worker = Worker(config=DEBUG_CONFIG, task=DEBUG_TASK)
 
     worker.run()
