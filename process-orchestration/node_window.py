@@ -7,11 +7,6 @@ from tkinter import ttk
 from ui_log import UILamp, UILayout, UIProgress, UIValue, parse_ui
 
 
-LAMP_COLORS = {"green": "#22C55E", "yellow": "#F59E0B", "red": "#EF4444"}
-LAMP_OFF = "#94A3B8"
-VALUE_COLORS = {"default": "#0F172A", **LAMP_COLORS}
-
-
 class NodeWindow:
     """Node別UIログからカードを動的生成・更新するWindow。"""
 
@@ -46,12 +41,12 @@ class NodeWindow:
         container.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 12))
         container.columnconfigure(0, weight=1)
         container.rowconfigure(0, weight=1)
-        canvas = tk.Canvas(container, highlightthickness=0, background="#F1F5F9")
+        canvas = tk.Canvas(container, highlightthickness=0, bg="#F1F5F9")
         canvas.grid(row=0, column=0, sticky="nsew")
         scrollbar = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
         scrollbar.grid(row=0, column=1, sticky="ns")
         canvas.configure(yscrollcommand=scrollbar.set)
-        self.content = tk.Frame(canvas, background="#F1F5F9")
+        self.content = tk.Frame(canvas, bg="#F1F5F9")
         content_id = canvas.create_window((0, 0), window=self.content, anchor="nw")
         self.content.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.bind("<Configure>", lambda e: canvas.itemconfigure(content_id, width=e.width))
@@ -75,12 +70,10 @@ class NodeWindow:
                 logs = self.api.process_logs(self.name)
                 if not isinstance(logs, list):
                     raise ValueError("Invalid logs response")
-
                 # 前回取得したログとの重複を除外する。
                 overlap = min(len(self.previous_logs), len(logs))
                 while overlap and self.previous_logs[-overlap:] != logs[:overlap]:
                     overlap -= 1
-
                 for line in logs[overlap:]:
                     try:
                         message = parse_ui(line)
@@ -102,7 +95,6 @@ class NodeWindow:
         span = message.columnspan if message.columnspan is not None else 1
         if column + span > self.columns:
             raise ValueError(f"Card exceeds grid columns: {card_id}")
-
         # 同じ行の既存カードと表示領域が重ならないことを確認する。
         for existing in self.cards.values():
             if existing["row"] == row and column < existing["column"] + existing["span"] and existing["column"] < column + span:
@@ -120,7 +112,7 @@ class NodeWindow:
             # ランプと状態文字列を同じ行に配置する。
             lamp_frame = tk.Frame(frame, bg="white")
             lamp_frame.grid(row=1, column=0, sticky="w", pady=(2, 0))
-            lamp = tk.Label(lamp_frame, text="●", bg="white", fg=LAMP_OFF, font=("Segoe UI", 32))
+            lamp = tk.Label(lamp_frame, text="●", bg="white", fg="#94A3B8", font=("Segoe UI", 32))
             lamp.grid(row=0, column=0, sticky="w")
             # ランプ横の状態文字列はUIログのtextで更新する。
             lamp_text = tk.Label(lamp_frame, text="", bg="white", fg="#0F172A", font=("Segoe UI", 17, "bold"))
@@ -133,14 +125,13 @@ class NodeWindow:
                 # 初回は通常Progressbarを生成する。
                 progress = ttk.Progressbar(frame, maximum=100)
                 progress.grid(row=2, column=0, sticky="ew", pady=(10, 0))
-
         self.cards[card_id] = {
             "frame": frame, "title": title, "value": value,
             "lamp": lamp, "lamp_text": lamp_text, "progress": progress,
             "gauge": None, "ticks": None, "type": message.type,
             "row": row, "column": column, "span": span,
             "unit": getattr(message, "unit", None) or "",
-            "color": getattr(message, "color", None) or "green", "on": False,
+            "color": getattr(message, "color", None) or "#94A3B8",
             "reference": None, "range": None, "current": None,
         }
 
@@ -178,14 +169,12 @@ class NodeWindow:
     def update_progress(self, card, message):
         """通常Progressbarまたは中央基準型の値を更新する。"""
         reference, spread = message.reference, message.range
-
         # 通常型から中央基準型へ切り替える場合は両方の設定が必須。
         if card["gauge"] is None and (reference is not None or spread is not None):
             if reference is None or spread is None:
                 raise ValueError("reference and range must be specified together")
             card["reference"], card["range"] = reference, spread
             self.enable_reference(card)
-
         if card["gauge"] is None:
             if message.value is not None:
                 if message.value > 100:
@@ -204,7 +193,6 @@ class NodeWindow:
             card["unit"] = message.unit
         if message.value is not None:
             card["current"] = message.value
-
         current = card["current"]
         if current is not None:
             difference = current - card["reference"]
@@ -231,12 +219,10 @@ class NodeWindow:
             card["title"].configure(text=message.label)
 
         if isinstance(message, UILamp):
-            # ランプの色とON/OFF状態を更新する。
+            # 指定されたカラーコードでランプを更新する。
             if message.color is not None:
                 card["color"] = message.color
-            if message.value is not None:
-                card["on"] = message.value
-            card["lamp"].configure(fg=LAMP_COLORS[card["color"]] if card["on"] else LAMP_OFF)
+            card["lamp"].configure(fg=card["color"])
             # textが指定された場合、ランプ横の文字を更新する。
             if message.text is not None:
                 card["lamp_text"].configure(text=message.text)
@@ -245,7 +231,7 @@ class NodeWindow:
             if message.unit is not None:
                 card["unit"] = message.unit
             if message.color is not None:
-                card["value"].configure(fg=VALUE_COLORS[message.color])
+                card["value"].configure(fg=message.color)
             if message.value is not None:
                 card["value"].configure(text=f"{message.value} {card['unit']}".strip())
         elif isinstance(message, UIProgress):

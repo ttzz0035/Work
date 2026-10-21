@@ -37,7 +37,7 @@ class UIValue(UICard):
     type: Literal["value"] = "value"
     value: str | int | float | bool | None = None
     unit: str | None = None
-    color: Literal["default", "green", "yellow", "red"] | None = None
+    color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
 
 
 class UIProgress(UICard):
@@ -62,11 +62,10 @@ class UIProgress(UICard):
 
 
 class UILamp(UICard):
-    """ON/OFFを色付きランプと任意の文字で表示するカード。"""
+    """カラーコードと任意の文字で状態を表示するカード。"""
 
     type: Literal["lamp"] = "lamp"
-    value: bool | None = None
-    color: Literal["green", "yellow", "red"] | None = None
+    color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
     text: str | None = None
 
 

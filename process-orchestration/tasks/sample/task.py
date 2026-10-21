@@ -39,13 +39,13 @@ class Task:
         emit_ui(UIProgress(id="execution_time", label="Execution Time", row=2, column=0, columnspan=3))
 
         # ランプを1つだけ定義する。
-        emit_ui(UILamp(id="state", label="State", color="green", text="Running", row=3, column=0, columnspan=3))
+        emit_ui(UILamp(id="state", label="State", color="#22C55E", text="Running", row=3, column=0, columnspan=3))
 
         count = 0
         states = (
-            ("green", "Running"),
-            ("yellow", "Warning"),
-            ("red", "Error"),
+            ("#22C55E", "Running"),
+            ("#F59E0B", "Warning"),
+            ("#EF4444", "Error"),
         )
 
         while True:
@@ -58,7 +58,7 @@ class Task:
             # 既存カードの値のみ更新する。
             emit_ui(UIValue(id="temperature", value=temperature))
             emit_ui(UIValue(id="pressure", value=pressure))
-            emit_ui(UIValue(id="connection", value="Connected", color="green"))
+            emit_ui(UIValue(id="connection", value="Connected", color="#22C55E"))
             emit_ui(UIProgress(id="progress", value=progress))
 
             # 中央基準型の基準時間・表示範囲・実測値を更新ログで設定する。
@@ -66,7 +66,7 @@ class Task:
 
             # 1つのランプを状態に応じて緑・黄・赤に切り替える。
             color, text = states[(count // 5) % len(states)]
-            emit_ui(UILamp(id="state", value=True, color=color, text=text))
+            emit_ui(UILamp(id="state", color=color, text=text))
 
             count += 1
             time.sleep(interval)
