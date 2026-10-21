@@ -1,0 +1,14 @@
+{
+  "source": {
+    "includePattern": "\\.(js|mjs|cjs)$"
+  },
+  "opts": {
+    "recurse": true,
+    "private": true
+  },
+  "templates": {
+    "default": {
+      "outputSourceFiles": true
+    }
+  }
+}
