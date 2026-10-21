@@ -4,7 +4,7 @@
 import json
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 
 class UIBase(BaseModel):
@@ -32,43 +32,52 @@ class UICard(UIBase):
 
 
 class UIValue(UICard):
-    """文字列・数値を表示するカード。"""
+    """数値・文字列・状態を表示するカード。"""
 
     type: Literal["value"] = "value"
     value: str | int | float | bool | None = None
     unit: str | None = None
-
-
-class UIStatus(UICard):
-    """状態を文字列で表示するカード。"""
-
-    type: Literal["status"] = "status"
-    value: str | None = None
+    color: Literal["default", "green", "yellow", "red"] | None = None
 
 
 class UIProgress(UICard):
-    """0〜100%の進捗を表示するカード。"""
+    """通常の進捗、または基準値を中央とする偏差を表示するカード。"""
 
     type: Literal["progress"] = "progress"
-    value: int | float | None = Field(default=None, ge=0, le=100)
+    value: int | float | None = Field(default=None, ge=0)
+    reference: int | float | None = Field(default=None, ge=0)
+    range: int | float | None = Field(default=None, gt=0)
+    unit: str | None = None
+
+    @model_validator(mode="after")
+    def validate_progress(self):
+        # 通常モードで完結するメッセージは0〜100%に制限する。
+        # 値だけの更新はDashboardが既存カードのモードに基づいて検証する。
+        if self.reference is None and self.range is None and (
+            self.label is not None or self.row is not None or self.column is not None
+        ):
+            if self.value is not None and self.value > 100:
+                raise ValueError("Normal progress must be between 0 and 100")
+        return self
 
 
 class UILamp(UICard):
-    """ON/OFFを色付きランプと文字で表示するカード。"""
+    """ON/OFFを色付きランプと任意の文字で表示するカード。"""
 
     type: Literal["lamp"] = "lamp"
     value: bool | None = None
     color: Literal["green", "yellow", "red"] | None = None
     text: str | None = None
 
+
 # typeフィールドでメッセージのSchemaを判別する。
 UIMessage = Annotated[
-    UILayout | UIValue | UIStatus | UIProgress | UILamp,
+    UILayout | UIValue | UIProgress | UILamp,
     Field(discriminator="type"),
 ]
 
 UI_ADAPTER = TypeAdapter(UIMessage)
-UI_CLASSES = (UILayout, UIValue, UIStatus, UIProgress, UILamp)
+UI_CLASSES = (UILayout, UIValue, UIProgress, UILamp)
 PREFIX = "[UI]"
 
 
