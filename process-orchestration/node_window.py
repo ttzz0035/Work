@@ -57,10 +57,13 @@ class NodeWindow:
         for card_id, card in self.cards.items():
             if card["column"] + card["span"] > columns:
                 raise ValueError(f"Card exceeds new columns: {card_id}")
+
         for column in range(max(self.columns, columns)):
             self.content.columnconfigure(column, weight=0, uniform="")
+
         for column in range(columns):
             self.content.columnconfigure(column, weight=1, uniform="cards")
+
         self.columns = columns
 
     def watch(self):
@@ -70,10 +73,12 @@ class NodeWindow:
                 logs = self.api.process_logs(self.name)
                 if not isinstance(logs, list):
                     raise ValueError("Invalid logs response")
+
                 # 前回取得したログとの重複を除外する。
                 overlap = min(len(self.previous_logs), len(logs))
                 while overlap and self.previous_logs[-overlap:] != logs[:overlap]:
                     overlap -= 1
+
                 for line in logs[overlap:]:
                     try:
                         message = parse_ui(line)
@@ -81,39 +86,49 @@ class NodeWindow:
                             self.events.put(("ui", message))
                     except ValueError as exc:
                         self.events.put(("error", str(exc)))
+
                 self.previous_logs = logs
                 self.events.put(("connection", "Live"))
+
             except Exception as exc:
                 self.events.put(("connection", f"Disconnected: {exc}"))
+
             self.closed.wait(1)
 
     def create_card(self, message):
         """初回ログではカードと通常のコントロールを生成する。"""
         card_id = message.id
-        row = message.row if message.row is not None else len(self.cards)
-        column = message.column if message.column is not None else 0
+        row = message.row
+        column = message.column
         span = message.columnspan if message.columnspan is not None else 1
+
         if column + span > self.columns:
             raise ValueError(f"Card exceeds grid columns: {card_id}")
+
         # 同じ行の既存カードと表示領域が重ならないことを確認する。
         for existing in self.cards.values():
             if existing["row"] == row and column < existing["column"] + existing["span"] and existing["column"] < column + span:
                 raise ValueError(f"Overlapping UI cards: {card_id}")
 
-        frame = tk.Frame(self.content, bg="white", padx=16, pady=14, highlightbackground="#CBD5E1", highlightthickness=1)
+        # カード内部の表示内容によってグリッドの列幅が変化しないようにする。
+        frame = tk.Frame(self.content, width=1, height=130, bg="white", padx=16, pady=14, highlightbackground="#CBD5E1", highlightthickness=1)
         frame.grid(row=row, column=column, columnspan=span, sticky="nsew", padx=6, pady=6)
+        frame.grid_propagate(False)
         frame.columnconfigure(0, weight=1)
+
         title = tk.Label(frame, text=message.label or card_id, anchor="w", bg="white", fg="#64748B", font=("Segoe UI", 10))
         title.grid(row=0, column=0, sticky="ew")
 
         # typeに応じて適切なコントロールを生成する。
         lamp = lamp_text = progress = None
+
         if isinstance(message, UILamp):
             # ランプと状態文字列を同じ行に配置する。
             lamp_frame = tk.Frame(frame, bg="white")
             lamp_frame.grid(row=1, column=0, sticky="w", pady=(2, 0))
             lamp = tk.Label(lamp_frame, text="●", bg="white", fg="#94A3B8", font=("Segoe UI", 32))
             lamp.grid(row=0, column=0, sticky="w")
+
             # ランプ横の状態文字列はUIログのtextで更新する。
             lamp_text = tk.Label(lamp_frame, text="", bg="white", fg="#0F172A", font=("Segoe UI", 17, "bold"))
             lamp_text.grid(row=0, column=1, sticky="w", padx=(10, 0))
@@ -121,10 +136,12 @@ class NodeWindow:
         else:
             value = tk.Label(frame, anchor="w", bg="white", fg="#0F172A", font=("Segoe UI", 17, "bold"))
             value.grid(row=1, column=0, sticky="ew", pady=(6, 0))
+
             if isinstance(message, UIProgress):
                 # 初回は通常Progressbarを生成する。
                 progress = ttk.Progressbar(frame, maximum=100)
                 progress.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+
         self.cards[card_id] = {
             "frame": frame, "title": title, "value": value,
             "lamp": lamp, "lamp_text": lamp_text, "progress": progress,
@@ -139,11 +156,14 @@ class NodeWindow:
         """更新ログで基準値が設定された時点で中央基準型へ切り替える。"""
         card["progress"].destroy()
         card["progress"] = None
+
         frame = card["frame"]
         gauge = tk.Canvas(frame, height=22, bg="white", highlightthickness=0)
         gauge.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+
         ticks = tk.Label(frame, bg="white", fg="#64748B", font=("Segoe UI", 9))
         ticks.grid(row=3, column=0, sticky="ew")
+
         card["gauge"], card["ticks"] = gauge, ticks
         gauge.bind("<Configure>", lambda event, c=card: self.draw_reference(c))
 
@@ -153,7 +173,10 @@ class NodeWindow:
         width = canvas.winfo_width()
         center = width / 2
         reference = card["reference"]
-        lower, upper = card["range"]
+        spread = card["range"]
+
+        # 数値指定は左右対称、タプル指定は左右個別の範囲とする。
+        lower, upper = (-spread, spread) if isinstance(spread, (int, float)) else spread
 
         canvas.delete("all")
         canvas.create_rectangle(0, 5, width, 17, fill="#E2E8F0", outline="")
@@ -179,16 +202,18 @@ class NodeWindow:
         card["ticks"].configure(
             text=f"{reference+lower:g} {unit}     |     {reference:g} {unit} (基準)     |     {reference+upper:g} {unit}"
         )
-        
+
     def update_progress(self, card, message):
         """通常Progressbarまたは中央基準型の値を更新する。"""
         reference, spread = message.reference, message.range
+
         # 通常型から中央基準型へ切り替える場合は両方の設定が必須。
         if card["gauge"] is None and (reference is not None or spread is not None):
             if reference is None or spread is None:
                 raise ValueError("reference and range must be specified together")
             card["reference"], card["range"] = reference, spread
             self.enable_reference(card)
+
         if card["gauge"] is None:
             if message.value is not None:
                 if message.value > 100:
@@ -207,10 +232,12 @@ class NodeWindow:
             card["unit"] = message.unit
         if message.value is not None:
             card["current"] = message.value
+
         current = card["current"]
         if current is not None:
             difference = current - card["reference"]
             card["value"].configure(text=f"{current:g} {card['unit']}   ({difference:+g} {card['unit']})")
+
         self.draw_reference(card)
 
     def apply(self, message):
@@ -218,8 +245,13 @@ class NodeWindow:
         if isinstance(message, UILayout):
             self.set_columns(message.columns)
             return
+
+        # 初期定義ログでのみカードを生成する。
         if message.id not in self.cards:
+            if message.row is None or message.column is None:
+                raise ValueError(f"Undefined UI card: {message.id}")
             self.create_card(message)
+
         card = self.cards[message.id]
         if card["type"] != message.type:
             raise ValueError(f"Cannot change UI type: {message.id}")
@@ -229,6 +261,7 @@ class NodeWindow:
             new_value = getattr(message, key)
             if new_value is not None and new_value != original:
                 raise ValueError(f"Cannot change {key}: {message.id}")
+
         if message.label is not None:
             card["title"].configure(text=message.label)
 
@@ -237,9 +270,11 @@ class NodeWindow:
             if message.color is not None:
                 card["color"] = message.color
             card["lamp"].configure(fg=card["color"])
+
             # textが指定された場合、ランプ横の文字を更新する。
             if message.text is not None:
                 card["lamp_text"].configure(text=message.text)
+
         elif isinstance(message, UIValue):
             # 通常値と状態値を同じLabelで表示する。
             if message.unit is not None:
@@ -248,6 +283,7 @@ class NodeWindow:
                 card["value"].configure(fg=message.color)
             if message.value is not None:
                 card["value"].configure(text=f"{message.value} {card['unit']}".strip())
+
         elif isinstance(message, UIProgress):
             self.update_progress(card, message)
 
@@ -255,6 +291,7 @@ class NodeWindow:
         """Tkinterのメインスレッドで画面を更新する。"""
         if self.closed.is_set():
             return
+
         while not self.events.empty():
             kind, value = self.events.get_nowait()
             if kind == "connection":
@@ -266,6 +303,7 @@ class NodeWindow:
                     self.apply(value)
                 except (ValueError, TypeError, tk.TclError) as exc:
                     self.status.set(f"UI Error: {exc}")
+
         self.window.after(100, self.poll)
 
     def close(self):
