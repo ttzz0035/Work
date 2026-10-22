@@ -152,20 +152,34 @@ class NodeWindow:
         canvas = card["gauge"]
         width = canvas.winfo_width()
         center = width / 2
-        reference, spread = card["reference"], card["range"]
+        reference = card["reference"]
+        lower, upper = card["range"]
+
         canvas.delete("all")
         canvas.create_rectangle(0, 5, width, 17, fill="#E2E8F0", outline="")
+
         current = card["current"]
         if current is not None:
-            delta = max(-spread, min(spread, current - reference))
-            endpoint = center + delta / spread * center
-            color = "#16A34A" if delta < 0 else "#EF4444"
+            delta = current - reference
+
+            # マイナス側とプラス側で異なる表示範囲を使用する。
+            if delta < 0:
+                endpoint = center + max(delta, lower) / abs(lower) * center
+                color = "#16A34A"
+            else:
+                endpoint = center + min(delta, upper) / upper * center
+                color = "#EF4444"
+
             if delta != 0:
                 canvas.create_rectangle(min(center, endpoint), 5, max(center, endpoint), 17, fill=color, outline="")
-        canvas.create_line(center, 0, center, 22, fill="#0F172A", width=2)
-        unit = card["unit"]
-        card["ticks"].configure(text=f"{reference-spread:g} {unit}     |     {reference:g} {unit} (基準)     |     {reference+spread:g} {unit}")
 
+        canvas.create_line(center, 0, center, 22, fill="#0F172A", width=2)
+
+        unit = card["unit"]
+        card["ticks"].configure(
+            text=f"{reference+lower:g} {unit}     |     {reference:g} {unit} (基準)     |     {reference+upper:g} {unit}"
+        )
+        
     def update_progress(self, card, message):
         """通常Progressbarまたは中央基準型の値を更新する。"""
         reference, spread = message.reference, message.range

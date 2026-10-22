@@ -25,7 +25,7 @@ class Task:
             raise ValueError("interval must be positive")
 
         # Dashboardのグリッドを3列に設定する。
-        emit_ui(UILayout(columns=3))
+        emit_ui(UILayout(columns=4))
 
         # 測定値と進捗のカードを定義する。
         emit_ui(UIValue(id="temperature", label="Temperature", unit="°C", row=0, column=0))
@@ -33,10 +33,10 @@ class Task:
         emit_ui(UIValue(id="connection", label="Connection", row=0, column=2))
 
         # 通常のProgressbarを定義する（0〜100%）。
-        emit_ui(UIProgress(id="progress", label="Progress", row=1, column=0, columnspan=3))
+        emit_ui(UIProgress(id="progress", label="Progress", row=1, column=0, columnspan=2))
 
         # 実行時間のカードを定義する。基準値と範囲は更新ログで設定する。
-        emit_ui(UIProgress(id="execution_time", label="Execution Time", row=2, column=0, columnspan=3))
+        emit_ui(UIProgress(id="execution_time", label="Execution Time", row=1, column=2, columnspan=2))
 
         # ランプを1つだけ定義する。
         emit_ui(UILamp(id="state", label="State", color="#22C55E", text="Running", row=3, column=0, columnspan=3))
@@ -62,7 +62,7 @@ class Task:
             emit_ui(UIProgress(id="progress", value=progress))
 
             # 中央基準型の基準時間・表示範囲・実測値を更新ログで設定する。
-            emit_ui(UIProgress(id="execution_time", reference=10.0, range=5.0, unit="s", value=execution_time))
+            emit_ui(UIProgress(id="execution_time", reference=10.0, range=(-10.0,5.0), unit="s", value=execution_time))
 
             # 1つのランプを状態に応じて緑・黄・赤に切り替える。
             color, text = states[(count // 5) % len(states)]

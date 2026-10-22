@@ -46,7 +46,7 @@ class UIProgress(UICard):
     type: Literal["progress"] = "progress"
     value: int | float | None = Field(default=None, ge=0)
     reference: int | float | None = Field(default=None, ge=0)
-    range: int | float | None = Field(default=None, gt=0)
+    range: tuple[float, float] | None = None
     unit: str | None = None
 
     @model_validator(mode="after")
@@ -58,9 +58,14 @@ class UIProgress(UICard):
         ):
             if self.value is not None and self.value > 100:
                 raise ValueError("Normal progress must be between 0 and 100")
+
+        # 基準値より小さい側と大きい側の表示範囲を検証する。
+        if self.range is not None:
+            if self.range[0] >= 0 or self.range[1] <= 0:
+                raise ValueError("range must be (negative, positive)")
+
         return self
-
-
+    
 class UILamp(UICard):
     """カラーコードと任意の文字で状態を表示するカード。"""
 
