@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { parse } from "@babel/parser";
 import traverseModule from "@babel/traverse";
 import generateModule from "@babel/generator";
+import * as t from "@babel/types";
 import { Resvg } from "@resvg/resvg-js";
 
 const require = createRequire(import.meta.url);
@@ -17,13 +18,16 @@ const DOCS = path.join(ROOT, "docs");
 const FLOWS = path.join(DOCS, "flows");
 const JSDOC = path.join(DOCS, "jsdoc-src");
 
+// フロー図で式を省略しないための表示文字数上限。
+const MAX_FLOW_TEXT_LENGTH = 500;
+
 function esc(value) {
-  return String(value).replace(/[&<>"']/g, (c) =>
+  return String(value).replace(/[&<>"']/g, c =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
 
 function discover(dir) {
-  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
     const file = path.join(dir, entry.name);
     if (entry.isDirectory()) return discover(file);
     return entry.isFile() && file.endsWith(".js") ? [file] : [];
@@ -79,6 +83,38 @@ function description(source, name) {
   if (match) return match[1].trim();
   const comment = source.match(/^\s*\/\*\*?\s*(.+)/);
   return comment ? comment[1].trim() : name;
+}
+
+// テンプレートリテラルをフロー図専用の単一表示式へ変換する。
+// ${}内の参照変数を独立した処理ノードとして展開させない。
+// 変換は図の生成時だけ行い、実際のソースやテストには影響させない。
+function flowDisplayCode(code) {
+  const tree = parse(code, { sourceType: "script" });
+
+  traverse(tree, {
+    TemplateLiteral(p) {
+      // テンプレート文字列全体を、元の表記を保持した文字列にする。
+      const display = generate(p.node, { comments: false }).code;
+      p.replaceWith(t.stringLiteral(display));
+      p.skip();
+    },
+  });
+
+  return generate(tree, { comments: true }).code;
+}
+
+// SVGの表示上限を拡大し、長い代入式の省略を抑制する。
+function renderFlow(code) {
+  const tree = flow.convertCodeToFlowTree(flowDisplayCode(code));
+  const renderer = flow.createSVGRender();
+
+  renderer.applyTheme({
+    common: {
+      maxNameLength: MAX_FLOW_TEXT_LENGTH,
+    },
+  });
+
+  return renderer.buildShapesTree(tree).print();
 }
 
 // SVGは表示用、PNGはクリップボード用として分離する。
@@ -144,7 +180,10 @@ button.addEventListener("click", async () => {
 }
 
 function diagrams(code, name) {
-  const flowSvg = flow.convertCodeToSvg(code);
+  // 処理フローのみ表示用ASTを使用する。
+  const flowSvg = renderFlow(code);
+
+  // 関数依存図は元のコードをそのまま解析する。
   const builder = flow.createFlowTreeBuilder();
   builder.setAbstractionLevel(flow.ABSTRACTION_LEVELS.FUNCTION_DEPENDENCIES);
   const callsSvg = flow.convertFlowTreeToSvg(builder.build(code));
@@ -154,7 +193,7 @@ function diagrams(code, name) {
     ["calls", callsSvg, "関数依存図"],
   ]) {
     // 変換は生成時に行い、ブラウザ側では画像を再描画しない。
-    const png = new Resvg(svg, {background: "white"}).render().asPng();
+    const png = new Resvg(svg, { background: "white" }).render().asPng();
     if (!png.length) throw new Error(`${name}.${type}: PNG生成失敗`);
 
     const svgName = `${name}.${type}.svg`;
@@ -240,19 +279,48 @@ function build(file) {
   const name = relative.replace(/[\\/]/g, "_").replace(/\.js$/, "");
   const source = fs.readFileSync(file, "utf8");
   const summary = description(source, name);
-  const info = analyze(source);
+  const failures = [];
 
-  fs.writeFileSync(
-    path.join(JSDOC, `${name}.js`),
-    jsdocSource(source, name, summary),
-    "utf8"
-  );
-  diagrams(wrap(source), name);
+  // 各成果物を独立して生成し、一部が失敗しても継続する。
+  let tagHtml = "";
+  let conditionHtml = "";
+
+  try {
+    const info = analyze(source);
+    tagHtml = tagTable(info.inputs, info.outputs);
+    conditionHtml = conditionTable(info.conditions);
+    console.log(`[PASS] AST: ${relative}`);
+  } catch (error) {
+    failures.push(`AST: ${error.message}`);
+  }
+
+  try {
+    fs.writeFileSync(
+      path.join(JSDOC, `${name}.js`),
+      jsdocSource(source, name, summary),
+      "utf8"
+    );
+    console.log(`[PASS] JSDoc: ${relative}`);
+  } catch (error) {
+    failures.push(`JSDoc: ${error.message}`);
+  }
+
+  try {
+    diagrams(wrap(source), name);
+    console.log(`[PASS] Diagrams: ${relative}`);
+  } catch (error) {
+    failures.push(`Diagrams: ${error.message}`);
+  }
+
+  for (const error of failures) {
+    errors.push(`${relative}: ${error}`);
+    console.error(`[FAIL] ${relative}: ${error}`);
+  }
 
   return `<section><h2>${esc(relative)}</h2>
 <p>${esc(summary)}</p>
-<h3>入出力タグ</h3>${tagTable(info.inputs, info.outputs)}
-<h3>制御条件</h3>${conditionTable(info.conditions)}
+<h3>入出力タグ</h3>${tagHtml}
+<h3>制御条件</h3>${conditionHtml}
 <h3>解析成果物</h3>
 <p><a href="flows/${name}.flow.html">処理フロー</a> |
 <a href="flows/${name}.calls.html">関数依存図</a> |
@@ -264,8 +332,8 @@ if (!fs.existsSync(SOURCE)) throw new Error("targets directory not found");
 const files = discover(SOURCE);
 if (!files.length) throw new Error("No FUXA targets found");
 
-fs.mkdirSync(FLOWS, {recursive: true});
-fs.mkdirSync(JSDOC, {recursive: true});
+fs.mkdirSync(FLOWS, { recursive: true });
+fs.mkdirSync(JSDOC, { recursive: true });
 
 const sections = [];
 const errors = [];
@@ -273,7 +341,6 @@ const errors = [];
 for (const file of files) {
   try {
     sections.push(build(file));
-    console.log(`[PASS] ${path.relative(SOURCE, file)}`);
   } catch (error) {
     errors.push(`${file}: ${error.message}`);
     console.error(`[FAIL] ${file}: ${error.message}`);
