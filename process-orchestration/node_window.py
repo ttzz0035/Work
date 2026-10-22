@@ -111,7 +111,7 @@ class NodeWindow:
                 raise ValueError(f"Overlapping UI cards: {card_id}")
 
         # カード内部の表示内容によってグリッドの列幅が変化しないようにする。
-        frame = tk.Frame(self.content, width=1, height=130, bg="white", padx=16, pady=14, highlightbackground="#CBD5E1", highlightthickness=1)
+        frame = tk.Frame(self.content, width=160, height=130, bg="white", padx=16, pady=14, highlightbackground="#CBD5E1", highlightthickness=1)
         frame.grid(row=row, column=column, columnspan=span, sticky="nsew", padx=6, pady=6)
         frame.grid_propagate(False)
         frame.columnconfigure(0, weight=1)
