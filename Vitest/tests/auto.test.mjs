@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import axios from "axios";
 import fc from "fast-check";
 import { describe, it } from "vitest";
 import { parse } from "@babel/parser";
@@ -15,7 +14,7 @@ const SEED = 12345;
 
 // JSファイルを再帰的に検出する。
 function discover(dir) {
-  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
     const file = path.join(dir, entry.name);
     if (entry.isDirectory()) return discover(file);
     return entry.isFile() && file.endsWith(".js") ? [file] : [];
@@ -53,7 +52,9 @@ function compare(a, op, b) {
 // FUXAタグ、条件式、Axiosの使用を解析する。
 function analyze(filename) {
   const source = fs.readFileSync(filename, "utf8");
-  const ast = parse(`async function __test__(){\n${source}\n}`);
+  const ast = parse(`async function __test__(){\n${source}\n}`, {
+    sourceType: "script",
+  });
   const tags = new Map();
   const variables = new Map();
   const predicates = [];
@@ -122,13 +123,13 @@ function analyze(filename) {
       if (value === undefined) throw new Error(`Unsupported comparison: ${filename}`);
 
       // 条件を評価する関数を保存する。左右の順序も維持する。
-      predicates.push((input) => left !== null
+      predicates.push(input => left !== null
         ? compare(input[tag], n.operator, value)
         : compare(value, n.operator, input[tag]));
 
       const values = tags.get(tag);
       if (typeof value === "number") {
-        [value - 1, value, value + 1].forEach((v) => values.add(v));
+        [value - 1, value, value + 1].forEach(v => values.add(v));
       } else if (typeof value === "string") {
         values.add(value);
         values.add(`${value}__other__`);
@@ -167,8 +168,8 @@ function generateCases(tags, predicates) {
   // 全境界値の組合せも保持し、探索漏れを防ぐ。
   let exhaustive = [{}];
   for (const [name, values] of entries) {
-    exhaustive = exhaustive.flatMap((row) =>
-      values.map((value) => ({ ...row, [name]: value }))
+    exhaustive = exhaustive.flatMap(row =>
+      values.map(value => ({ ...row, [name]: value }))
     );
   }
 
@@ -178,9 +179,9 @@ function generateCases(tags, predicates) {
   }
 
   // 条件のTrue/Falseを特徴量に変換する。
-  const remaining = [...unique.values()].map((input) => ({
+  const remaining = [...unique.values()].map(input => ({
     input,
-    bits: predicates.map((predicate) => Number(predicate(input))),
+    bits: predicates.map(predicate => Number(predicate(input))),
   }));
   const ordered = [];
   const covered = new Set();
@@ -221,14 +222,14 @@ function generateCases(tags, predicates) {
 // HTTPは通信せず、Axiosの戻り値・例外のみ模擬する。
 function generateHttpCases(fields, enabled) {
   if (!enabled) return [null];
-  const data = (v) => Object.fromEntries([...fields].map((name) => [name, v]));
+  const data = v => Object.fromEntries([...fields].map(name => [name, v]));
   return [
-    ...[true, false, 0, 1, "OK"].map((v) => ({ status: 200, data: data(v) })),
+    ...[true, false, 0, 1, "OK"].map(v => ({ status: 200, data: data(v) })),
     { status: 201, data: data(true) },
     { status: 400, data: {} },
     { status: 500, data: {} },
-    (mock) => mock.onAny().networkError(),
-    (mock) => mock.onAny().timeout(),
+    mock => mock.onAny().networkError(),
+    mock => mock.onAny().timeout(),
   ];
 }
 
@@ -239,44 +240,83 @@ function registerTest(filename) {
 
   describe(`FUXA WhiteBox: ${name}`, () => {
     it("C0/C1/C2 coverage", async () => {
-      const { tags, predicates, fields, usesAxios } = analyze(filename);
-      const inputs = generateCases(tags, predicates);
-      const httpCases = generateHttpCases(fields, usesAxios);
-      const driver = new FuxaDriver(filename);
+      const errors = [];
+      let inputs = [];
+      let httpCases = [];
+      let driver = null;
       let executed = 0;
-      let complete = false;
 
-      for (const input of inputs) {
-        for (const httpCase of httpCases) {
-          executed++;
+      // 解析と計測準備を分離し、一方が失敗しても実行可能な工程を試す。
+      try {
+        const { tags, predicates, fields, usesAxios } = analyze(filename);
+        inputs = generateCases(tags, predicates);
+        httpCases = generateHttpCases(fields, usesAxios);
+      } catch (error) {
+        errors.push(`Analyze: ${error.message}`);
+      }
 
-          try {
-            await driver.run(input, [], httpCase);
-          } catch (error) {
-            if (!(axios.isAxiosError(error) && httpCase?.status >= 400)) {
-              throw new Error(`${name}: Case ${executed}: ${error.message}`, { cause: error });
+      try {
+        driver = new FuxaDriver(filename);
+      } catch (error) {
+        errors.push(`Instrument: ${error.message}`);
+      }
+
+      if (driver && inputs.length && httpCases.length) {
+        // 全候補を試行し、網羅率達成または全ケース終了まで継続する。
+        let complete = false;
+
+        for (const input of inputs) {
+          for (const httpCase of httpCases) {
+            executed++;
+
+            try {
+              await driver.run(input, [], httpCase);
+            } catch (error) {
+              errors.push(`Case ${executed}: ${error.message}`);
             }
-          }
 
-          const result = driver.summary();
-          if (result.c0 === 100 && result.c1 === 100 && result.c2 === 100) {
-            complete = true;
-            break;
+            try {
+              const result = driver.summary();
+              complete = result.c0 === 100 && result.c1 === 100 && result.c2 === 100;
+            } catch (error) {
+              errors.push(`Summary ${executed}: ${error.message}`);
+            }
+
+            // 過去のケースで失敗があれば、残りのケースも続行する。
+            if (complete && errors.length === 0) break;
           }
+          if (complete && errors.length === 0) break;
         }
-        if (complete) break;
       }
 
       console.log(`\n=== ${name} ===`);
       console.log(`Generated tag cases: ${inputs.length}`);
       console.log(`HTTP scenarios: ${httpCases.length}`);
       console.log(`Executed cases: ${executed}`);
-      driver.report(`coverage/${reportName}`, 100);
-    }, 30000);
+
+      // 実行途中でエラーが発生しても、取得済みの計測結果を出力する。
+      if (driver) {
+        try {
+          driver.report(`coverage/${reportName}`, 100);
+        } catch (error) {
+          errors.push(`Report: ${error.message}`);
+        }
+      }
+
+      // すべてのレポート出力後に品質ゲートを判定する。
+      if (errors.length) {
+        for (const message of errors) console.error(`[FAIL] ${name}: ${message}`);
+        throw new AggregateError(
+          errors.map(message => new Error(message)),
+          `${name}: ${errors.length} error(s)\n${errors.join("\n")}`
+        );
+      }
+    }, 60000);
   });
 }
 
 if (!fs.existsSync(SCRIPT_DIR)) throw new Error(`targets directory not found: ${SCRIPT_DIR}`);
 const files = discover(SCRIPT_DIR);
 if (!files.length) throw new Error("No FUXA JavaScript files found");
+
 for (const file of files) registerTest(file);

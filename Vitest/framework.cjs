@@ -14,7 +14,7 @@ const reports = require("istanbul-reports");
 
 // ソース由来の文字列をHTMLで安全に表示する。
 function esc(value) {
-  return String(value).replace(/[&<>"']/g, (c) =>
+  return String(value).replace(/[&<>"']/g, c =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
 
@@ -39,7 +39,7 @@ class FuxaStub {
 
   getTagId(name) { return name; }
   value(id) { return this.tags.get(id); }
-  writesTo(id) { return this.writes.filter((e) => e.id === id); }
+  writesTo(id) { return this.writes.filter(e => e.id === id); }
 }
 
 // FUXAスクリプトの実行、計測、レポート生成を担当する。
@@ -55,7 +55,7 @@ class FuxaDriver {
 
   prepare() {
     const source = fs.readFileSync(this.file, "utf8");
-    if (!this.parameters.every((n) => /^[A-Za-z_$][\w$]*$/.test(n))) {
+    if (!this.parameters.every(n => /^[A-Za-z_$][\w$]*$/.test(n))) {
       throw new Error("Invalid parameter name");
     }
 
@@ -74,7 +74,7 @@ class FuxaDriver {
     });
 
     // 複合条件を基本条件に分解する。短絡評価は維持する。
-    const instrumentCondition = (node) => {
+    const instrumentCondition = node => {
       if (t.isLogicalExpression(node)) {
         node.left = instrumentCondition(node.left);
         node.right = instrumentCondition(node.right);
@@ -88,7 +88,6 @@ class FuxaDriver {
         trueCount: 0,
         falseCount: 0,
       });
-
       return t.callExpression(t.identifier("__c2"), [t.stringLiteral(id), node]);
     };
 
@@ -117,41 +116,44 @@ class FuxaDriver {
     const mock = new AxiosMockAdapter(http, { onNoMatch: "throwException" });
 
     // HTTP応答をテストケース単位でスタブ化する。
-    if (typeof httpScenario === "function") {
-      httpScenario(mock);
-    } else if (httpScenario !== null) {
-      const { status = 200, data = {} } = httpScenario;
-      mock.onAny().reply(status, data);
-    }
-
-    const context = vm.createContext({
-      console,
-      axios: http,
-      __args: args,
-      __c2: (id, value) => {
-        const c = this.conditions.get(id);
-        if (!c) throw new Error(`Unknown C2 condition: ${id}`);
-        if (Boolean(value)) c.trueCount++;
-        else c.falseCount++;
-        return value;
-      },
-      $getTag: (id) => stub.getTag(id),
-      $setTag: (id, value) => stub.setTag(id, value),
-      $getTagId: (name) => stub.getTagId(name),
-    });
-
-    const script = new vm.Script(
-      `${this.code}\nglobalThis.__result = __fuxaScript(...__args);`,
-      { filename: this.file }
-    );
-
     try {
-      script.runInContext(context, { timeout: 1000 });
-      const result = await context.__result;
-      return { result, stub, httpHistory: mock.history };
+      if (typeof httpScenario === "function") {
+        httpScenario(mock);
+      } else if (httpScenario !== null) {
+        const { status = 200, data = {} } = httpScenario;
+        mock.onAny().reply(status, data);
+      }
+
+      const context = vm.createContext({
+        console,
+        axios: http,
+        __args: args,
+        __c2: (id, value) => {
+          const c = this.conditions.get(id);
+          if (!c) throw new Error(`Unknown C2 condition: ${id}`);
+          if (Boolean(value)) c.trueCount++;
+          else c.falseCount++;
+          return value;
+        },
+        $getTag: id => stub.getTag(id),
+        $setTag: (id, value) => stub.setTag(id, value),
+        $getTagId: name => stub.getTagId(name),
+      });
+
+      const script = new vm.Script(
+        `${this.code}\nglobalThis.__result = __fuxaScript(...__args);`,
+        { filename: this.file }
+      );
+
+      try {
+        script.runInContext(context, { timeout: 1000 });
+        const result = await context.__result;
+        return { result, stub, httpHistory: mock.history };
+      } finally {
+        // 例外が発生した経路もカバレッジに反映する。
+        if (context.__coverage__) this.coverage.merge(context.__coverage__);
+      }
     } finally {
-      // 例外が発生した経路もカバレッジに反映する。
-      if (context.__coverage__) this.coverage.merge(context.__coverage__);
       mock.restore();
     }
   }
@@ -168,7 +170,8 @@ class FuxaDriver {
       functions: coverage.functions.pct,
       lines: coverage.lines.pct,
       c2: conditions.length
-        ? conditions.filter((c) => c.covered).length / conditions.length * 100 : 100,
+        ? conditions.filter(c => c.covered).length / conditions.length * 100
+        : 100,
       conditions,
     };
   }
@@ -178,16 +181,21 @@ class FuxaDriver {
     const file = this.coverage.fileCoverageFor(this.file);
     const branches = Object.entries(file.branchMap).map(([id, b]) => {
       const counts = file.b[id];
-      return { line: b.line, type: b.type, counts, covered: counts.every((n) => n > 0) };
+      return {
+        line: b.line,
+        type: b.type,
+        counts,
+        covered: counts.every(n => n > 0),
+      };
     });
 
-    const c1Rows = branches.map((b) => `<tr>
+    const c1Rows = branches.map(b => `<tr>
       <td>${b.line}</td><td>${esc(b.type)}</td>
       <td>${b.counts.map((n, i) => `経路${i + 1}: ${n}回`).join(" / ")}</td>
       <td class="${b.covered ? "pass" : "fail"}">${b.covered ? "PASS" : "FAIL"}</td>
     </tr>`).join("");
 
-    const c2Rows = result.conditions.map((c) => `<tr>
+    const c2Rows = result.conditions.map(c => `<tr>
       <td>${c.line}</td><td><code>${esc(c.expression)}</code></td>
       <td>${c.trueCount}</td><td>${c.falseCount}</td>
       <td class="${c.covered ? "pass" : "fail"}">${c.covered ? "PASS" : "FAIL"}</td>
@@ -223,13 +231,13 @@ class FuxaDriver {
 </section>`;
 
     // Istanbulが生成したソース詳細ページを探す。
-    const findPages = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    const findPages = dir => fs.readdirSync(dir, { withFileTypes: true }).flatMap(e => {
       const name = path.join(dir, e.name);
       if (e.isDirectory()) return findPages(name);
       return e.isFile() && e.name.endsWith(".html") && e.name !== "index.html" ? [name] : [];
     });
 
-    const target = findPages(directory).find((p) =>
+    const target = findPages(directory).find(p =>
       path.basename(p) === `${path.basename(this.file)}.html`
     );
     if (!target) throw new Error(`Istanbul source page not found: ${this.file}`);
@@ -242,37 +250,76 @@ class FuxaDriver {
 
     const updated = original.slice(0, position + marker.length) +
       panel + original.slice(position + marker.length);
-    fs.writeFileSync(target, updated);
+    fs.writeFileSync(target, updated, "utf8");
   }
 
   report(directory = "coverage", threshold = 100) {
-    const result = this.summary();
     const output = path.resolve(directory);
+    const errors = [];
+
     fs.mkdirSync(output, { recursive: true });
 
-    // Istanbulの標準HTMLを生成する。
-    const context = libReport.createContext({ dir: output, coverageMap: this.coverage });
-    reports.create("text").execute(context);
-    reports.create("html").execute(context);
-
-    // C1/C2の詳細をIstanbulのソース画面へ追加する。
-    this.writeC2Report(output, result);
-
-    console.log("\n=== FUXA COVERAGE ===");
-    console.log(`C0: ${result.c0.toFixed(2)}%`);
-    console.log(`C1: ${result.c1.toFixed(2)}%`);
-    console.log(`C2: ${result.c2.toFixed(2)}%`);
-
-    for (const c of result.conditions) {
-      console.log(`[${c.covered ? "PASS" : "FAIL"}] ${c.expression} TRUE=${c.trueCount} FALSE=${c.falseCount}`);
+    let result = null;
+    try {
+      result = this.summary();
+    } catch (error) {
+      errors.push(`Coverage summary: ${error.message}`);
     }
 
-    // すべてのレポート出力後に品質ゲートを判定する。
-    if ([result.c0, result.c1, result.c2].some((v) => v < threshold)) {
-      throw new Error(
-        `Coverage below ${threshold}%: C0=${result.c0.toFixed(2)}, ` +
-        `C1=${result.c1.toFixed(2)}, C2=${result.c2.toFixed(2)}`
-      );
+    // Istanbulの標準HTMLを生成する。
+    // HTML・テキスト・C1/C2詳細の失敗を独立して集計する。
+    if (this.coverage.files().length) {
+      try {
+        const context = libReport.createContext({ dir: output, coverageMap: this.coverage });
+        reports.create("html").execute(context);
+        console.log(`[PASS] Coverage HTML: ${output}`);
+      } catch (error) {
+        errors.push(`Coverage HTML: ${error.message}`);
+      }
+
+      try {
+        const context = libReport.createContext({ dir: output, coverageMap: this.coverage });
+        reports.create("text").execute(context);
+      } catch (error) {
+        errors.push(`Coverage text: ${error.message}`);
+      }
+    } else {
+      errors.push("Coverage unavailable: no executed instrumented script");
+    }
+
+    // C1/C2の詳細をIstanbulのソース画面へ追加する。
+    if (result && this.coverage.files().includes(this.file)) {
+      try {
+        this.writeC2Report(output, result);
+        console.log("[PASS] C1/C2 HTML");
+      } catch (error) {
+        errors.push(`C1/C2 HTML: ${error.message}`);
+      }
+    }
+
+    console.log("\n=== FUXA COVERAGE ===");
+
+    if (result) {
+      console.log(`C0: ${result.c0.toFixed(2)}%`);
+      console.log(`C1: ${result.c1.toFixed(2)}%`);
+      console.log(`C2: ${result.c2.toFixed(2)}%`);
+
+      for (const c of result.conditions) {
+        console.log(`[${c.covered ? "PASS" : "FAIL"}] ${c.expression} TRUE=${c.trueCount} FALSE=${c.falseCount}`);
+      }
+
+      // すべてのレポート出力後に品質ゲートを判定する。
+      if ([result.c0, result.c1, result.c2].some(v => v < threshold)) {
+        errors.push(
+          `Coverage below ${threshold}%: C0=${result.c0.toFixed(2)}, ` +
+          `C1=${result.c1.toFixed(2)}, C2=${result.c2.toFixed(2)}`
+        );
+      }
+    }
+
+    if (errors.length) {
+      for (const message of errors) console.error(`[FAIL] ${message}`);
+      throw new AggregateError(errors.map(message => new Error(message)), errors.join("\n"));
     }
 
     return result;
