@@ -124,22 +124,30 @@ class FuxaDriver {
         mock.onAny().reply(status, data);
       }
 
-      const context = vm.createContext({
-        console,
-        axios: http,
-        __args: args,
-        __c2: (id, value) => {
-          const c = this.conditions.get(id);
-          if (!c) throw new Error(`Unknown C2 condition: ${id}`);
-          if (Boolean(value)) c.trueCount++;
-          else c.falseCount++;
-          return value;
-        },
-        $getTag: id => stub.getTag(id),
-        $setTag: (id, value) => stub.setTag(id, value),
-        $getTagId: name => stub.getTagId(name),
-      });
+    const context = vm.createContext({
+      console,
+      axios: http,
+      __args: args,
 
+      // FUXAの事前読み込みモジュールをテスト環境で再現する。
+      // Axiosは実HTTP通信を行わず、モック済みインスタンスを返す。
+      require: name => {
+        if (name === "axios") return http;
+        throw new Error(`Unsupported module: ${name}`);
+      },
+
+      __c2: (id, value) => {
+        const c = this.conditions.get(id);
+        if (!c) throw new Error(`Unknown C2 condition: ${id}`);
+        if (Boolean(value)) c.trueCount++;
+        else c.falseCount++;
+        return value;
+      },
+
+      $getTag: id => stub.getTag(id),
+      $setTag: (id, value) => stub.setTag(id, value),
+      $getTagId: name => stub.getTagId(name),
+    });
       const script = new vm.Script(
         `${this.code}\nglobalThis.__result = __fuxaScript(...__args);`,
         { filename: this.file }
