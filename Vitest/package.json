@@ -29,6 +29,7 @@
     "vitest": "^5.0.5"
   },
   "dependencies": {
+    "@resvg/resvg-js": "^2.6.2",
     "axios": "^1.20.0"
   }
 }

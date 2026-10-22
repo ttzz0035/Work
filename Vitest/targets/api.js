@@ -9,8 +9,9 @@
  *   GET https://example.com/api/status
  *
  * 出力:
- *   motor  - モーターON/OFF
- *   status - 処理結果
+ *   motor   - モーターON/OFF
+ *   status  - 処理結果
+ *   checked - 処理完了
  *
  * テスト時:
  *   axios-mock-adapterを使い、実HTTP通信を行わない。
@@ -42,3 +43,6 @@ try {
     $setTag("status", "REQUEST_ERROR");
   }
 }
+
+// 正常系・異常系の合流後に実行する共通処理。
+$setTag("checked", true);
