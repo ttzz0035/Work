@@ -1,6 +1,7 @@
 
 import queue
 import threading
+import traceback
 import tkinter as tk
 from tkinter import ttk
 
@@ -21,8 +22,10 @@ class NodeWindow:
         self.cards = {}
         self.columns = 1
         self.previous_logs = []
+        self.ui_error = None
         self.build_ui()
         self.window.protocol("WM_DELETE_WINDOW", self.close)
+        print(f"[UI INFO] Dashboard opened: Node={self.name}", flush=True)
         threading.Thread(target=self.watch, daemon=True).start()
         self.window.after(100, self.poll)
 
@@ -65,6 +68,7 @@ class NodeWindow:
             self.content.columnconfigure(column, weight=1, uniform="cards")
 
         self.columns = columns
+        print(f"[UI LAYOUT] Node={self.name} columns={columns}", flush=True)
 
     def watch(self):
         """別スレッドでProcess Composeのログを監視する。"""
@@ -79,18 +83,27 @@ class NodeWindow:
                 while overlap and self.previous_logs[-overlap:] != logs[:overlap]:
                     overlap -= 1
 
-                for line in logs[overlap:]:
+                new_logs = logs[overlap:]
+                print(f"[UI INFO] Node={self.name} fetched={len(logs)} new={len(new_logs)}", flush=True)
+
+                for line in new_logs:
                     try:
                         message = parse_ui(line)
                         if message is not None:
+                            print(f"[UI RECEIVE] Node={self.name} {message.model_dump(exclude_none=True)}", flush=True)
                             self.events.put(("ui", message))
-                    except ValueError as exc:
+                    except Exception as exc:
+                        print(f"[UI ERROR] Node={self.name} parse failed: {exc}", flush=True)
+                        traceback.print_exc()
                         self.events.put(("error", str(exc)))
 
                 self.previous_logs = logs
                 self.events.put(("connection", "Live"))
 
             except Exception as exc:
+                print(f"[UI ERROR] Node={self.name} log fetch failed: {exc}", flush=True)
+                traceback.print_exc()
+                self.events.put(("error", str(exc)))
                 self.events.put(("connection", f"Disconnected: {exc}"))
 
             self.closed.wait(1)
@@ -109,6 +122,8 @@ class NodeWindow:
         for existing in self.cards.values():
             if existing["row"] == row and column < existing["column"] + existing["span"] and existing["column"] < column + span:
                 raise ValueError(f"Overlapping UI cards: {card_id}")
+
+        print(f"[UI CREATE] Node={self.name} id={card_id} type={message.type} row={row} column={column} columnspan={span}", flush=True)
 
         # カード内部の表示内容によってグリッドの列幅が変化しないようにする。
         frame = tk.Frame(self.content, width=160, height=130, bg="white", padx=16, pady=14, highlightbackground="#CBD5E1", highlightthickness=1)
@@ -152,6 +167,8 @@ class NodeWindow:
             "reference": None, "range": None, "current": None,
         }
 
+        print(f"[UI CREATED] Node={self.name} id={card_id}", flush=True)
+
     def enable_reference(self, card):
         """更新ログで基準値が設定された時点で中央基準型へ切り替える。"""
         card["progress"].destroy()
@@ -166,6 +183,7 @@ class NodeWindow:
 
         card["gauge"], card["ticks"] = gauge, ticks
         gauge.bind("<Configure>", lambda event, c=card: self.draw_reference(c))
+        print(f"[UI PROGRESS] Node={self.name} switched to reference gauge", flush=True)
 
     def draw_reference(self, card):
         """基準からの偏差を左右に描画し、目盛りを更新する。"""
@@ -242,6 +260,8 @@ class NodeWindow:
 
     def apply(self, message):
         """Layoutまたはカードの表示内容を反映する。"""
+        print(f"[UI APPLY] Node={self.name} {message.model_dump(exclude_none=True)}", flush=True)
+
         if isinstance(message, UILayout):
             self.set_columns(message.columns)
             return
@@ -287,6 +307,15 @@ class NodeWindow:
         elif isinstance(message, UIProgress):
             self.update_progress(card, message)
 
+        # 更新後の実際のGrid配置を記録する。
+        grid = card["frame"].grid_info()
+        print(
+            f"[UI UPDATED] Node={self.name} id={message.id} "
+            f"row={grid['row']} column={grid['column']} "
+            f"columnspan={grid['columnspan']}",
+            flush=True
+        )
+
     def poll(self):
         """Tkinterのメインスレッドで画面を更新する。"""
         if self.closed.is_set():
@@ -294,19 +323,32 @@ class NodeWindow:
 
         while not self.events.empty():
             kind, value = self.events.get_nowait()
+
             if kind == "connection":
-                self.status.set(value)
+                # UIエラーが発生している場合はLiveで上書きしない。
+                if not self.ui_error:
+                    self.status.set(value)
+
             elif kind == "error":
+                # UIエラーを保持し、画面とコンソールに表示する。
+                self.ui_error = str(value)
                 self.status.set(f"UI Error: {value}")
+                print(f"[UI ERROR] Node={self.name} {value}", flush=True)
+
             else:
                 try:
                     self.apply(value)
-                except (ValueError, TypeError, tk.TclError) as exc:
+                except Exception as exc:
+                    # カード生成・描画で発生した例外を表示する。
+                    self.ui_error = str(exc)
                     self.status.set(f"UI Error: {exc}")
+                    print(f"[UI ERROR] Node={self.name} apply failed: {exc}", flush=True)
+                    traceback.print_exc()
 
         self.window.after(100, self.poll)
 
     def close(self):
         """ログ監視を終了する。Node自体は停止しない。"""
+        print(f"[UI INFO] Dashboard closed: Node={self.name}", flush=True)
         self.closed.set()
         self.window.destroy()
