@@ -10,7 +10,12 @@ BASE = Path(__file__).resolve().parents[2]
 if str(BASE) not in sys.path:
     sys.path.insert(0, str(BASE))
 
+# プロジェクト共通モジュール
 from ui_log import UILamp, UILayout, UIProgress, UIValue, emit_ui
+
+# Task同階層モジュール
+# from tasks.sample.collector import Collector
+# from tasks.sample.analyzer import Analyzer
 
 
 class Task:
@@ -24,7 +29,7 @@ class Task:
         if interval <= 0:
             raise ValueError("interval must be positive")
 
-        # Dashboardのグリッドを3列に設定する。
+        # Dashboardのグリッドを4列に設定する。
         emit_ui(UILayout(columns=4))
 
         # 測定値と進捗のカードを定義する。
@@ -62,7 +67,7 @@ class Task:
             emit_ui(UIProgress(id="progress", value=progress))
 
             # 中央基準型の基準時間・表示範囲・実測値を更新ログで設定する。
-            emit_ui(UIProgress(id="execution_time", reference=10.0, range=(-10.0,5.0), unit="s", value=execution_time))
+            emit_ui(UIProgress(id="execution_time", reference=10.0, range=(-10.0, 5.0), unit="s", value=execution_time))
 
             # 1つのランプを状態に応じて緑・黄・赤に切り替える。
             color, text = states[(count // 5) % len(states)]
@@ -70,7 +75,6 @@ class Task:
 
             count += 1
             time.sleep(interval)
-
 
 
 if __name__ == "__main__":
