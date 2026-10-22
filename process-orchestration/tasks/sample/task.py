@@ -29,23 +29,6 @@ class Task:
         if interval <= 0:
             raise ValueError("interval must be positive")
 
-        # Dashboardのグリッドを4列に設定する。
-        emit_ui(UILayout(columns=4))
-
-        # 測定値と進捗のカードを定義する。
-        emit_ui(UIValue(id="temperature", label="Temperature", unit="°C", row=0, column=0))
-        emit_ui(UIValue(id="pressure", label="Pressure", unit="kPa", row=0, column=1))
-        emit_ui(UIValue(id="connection", label="Connection", row=0, column=2))
-
-        # 通常のProgressbarを定義する（0〜100%）。
-        emit_ui(UIProgress(id="progress", label="Progress", row=1, column=0, columnspan=2))
-
-        # 実行時間のカードを定義する。基準値と範囲は更新ログで設定する。
-        emit_ui(UIProgress(id="execution_time", label="Execution Time", row=1, column=2, columnspan=2))
-
-        # ランプを1つだけ定義する。
-        emit_ui(UILamp(id="state", label="State", color="#22C55E", text="Running", row=3, column=0, columnspan=3))
-
         count = 0
         states = (
             ("#22C55E", "Running"),
@@ -59,19 +42,24 @@ class Task:
             pressure = round(101.3 + math.cos(count / 7) * 2, 1)
             progress = (count * 5) % 101
             execution_time = round(10 + math.sin(count / 5) * 4, 2)
-
-            # 既存カードの値のみ更新する。
-            emit_ui(UIValue(id="temperature", value=temperature))
-            emit_ui(UIValue(id="pressure", value=pressure))
-            emit_ui(UIValue(id="connection", value="Connected", color="#22C55E"))
-            emit_ui(UIProgress(id="progress", value=progress))
-
-            # 中央基準型の基準時間・表示範囲・実測値を更新ログで設定する。
-            emit_ui(UIProgress(id="execution_time", reference=10.0, range=(-10.0, 5.0), unit="s", value=execution_time))
-
-            # 1つのランプを状態に応じて緑・黄・赤に切り替える。
             color, text = states[(count // 5) % len(states)]
-            emit_ui(UILamp(id="state", color=color, text=text))
+
+            # Dashboardのグリッドを4列に設定する。
+            emit_ui(UILayout(columns=4))
+
+            # 測定値と進捗のカード定義・最新値をまとめて送信する。
+            emit_ui(UIValue(id="temperature", label="Temperature", value=temperature, unit="°C", row=0, column=0))
+            emit_ui(UIValue(id="pressure", label="Pressure", value=pressure, unit="kPa", row=0, column=1))
+            emit_ui(UIValue(id="connection", label="Connection", value="Connected", color="#22C55E", row=0, column=2))
+
+            # 通常のProgressbarを定義・更新する（0〜100%）。
+            emit_ui(UIProgress(id="progress", label="Progress", value=progress, row=1, column=0, columnspan=2))
+
+            # 実行時間のカードを基準値・表示範囲・実測値とともに送信する。
+            emit_ui(UIProgress(id="execution_time", label="Execution Time", reference=10.0, range=(-10.0, 5.0), unit="s", value=execution_time, row=1, column=2, columnspan=2))
+
+            # ランプを1つだけ定義し、状態に応じて緑・黄・赤に切り替える。
+            emit_ui(UILamp(id="state", label="State", color=color, text=text, row=3, column=0, columnspan=3))
 
             count += 1
             time.sleep(interval)
