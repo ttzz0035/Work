@@ -101,10 +101,25 @@ class ProcessManagerApp:
         panel = ttk.LabelFrame(root, text="Nodes", padding=10)
         panel.grid(row=1, column=0, sticky="nsew", padx=12, pady=6)
         panel.columnconfigure(0, weight=1)
-        panel.rowconfigure(1, weight=1)
+        panel.rowconfigure(2, weight=1)
 
+        # Node全体の一括操作ボタンを配置する。
+        bulk = ttk.Frame(panel)
+        bulk.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        bulk.columnconfigure(0, weight=1)
+
+        bulk_controls = ttk.Frame(bulk)
+        bulk_controls.grid(row=0, column=1, sticky="e")
+
+        for index, action in enumerate(("start", "stop", "restart")):
+            self.add_button(
+                bulk_controls, ICONS[action], f"All Nodes: {action.title()}",
+                lambda a=action: self.submit(f"{a}_all"), index
+            )
+
+        # 既存のNode一覧ヘッダーを維持する。
         header = ttk.Frame(panel)
-        header.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        header.grid(row=1, column=0, sticky="ew", pady=(0, 6))
         header.columnconfigure(1, weight=1)
         ttk.Label(header, text="STATUS", width=16).grid(row=0, column=0)
         ttk.Label(header, text="NODE").grid(row=0, column=1, sticky="w")
@@ -112,7 +127,7 @@ class ProcessManagerApp:
         self.add_button(header, "↻", "Refresh", lambda: self.submit("refresh"), 3)
 
         container = ttk.Frame(panel)
-        container.grid(row=1, column=0, sticky="nsew")
+        container.grid(row=2, column=0, sticky="nsew")
         container.columnconfigure(0, weight=1)
         container.rowconfigure(0, weight=1)
 
@@ -187,10 +202,17 @@ class ProcessManagerApp:
         """ProcessServiceへの操作を別スレッドで実行する。"""
         if self.busy or self.closing:
             return
-        if action in ("server_stop", "server_restart") and not confirmed:
-            if not messagebox.askyesno(
-                "Confirm", "Process Composeと全Nodeを停止しますか？"
-            ):
+
+        # Server停止・再起動に加え、Nodeの一括停止・再起動も確認する。
+        if action in ("server_stop", "server_restart", "stop_all", "restart_all") and not confirmed:
+            message = (
+                "Process Composeと全Nodeを停止しますか？"
+                if action.startswith("server_")
+                else "全Nodeを停止しますか？"
+                if action == "stop_all"
+                else "全Nodeを停止してから再起動しますか？"
+            )
+            if not messagebox.askyesno("Confirm", message):
                 return
 
         self.set_busy(True)

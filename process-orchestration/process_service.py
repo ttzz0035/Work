@@ -15,6 +15,8 @@ from process_config import BASE, ProcessConfig
 class ProcessService:
     """Process Composeの操作とライフサイクルを管理する。"""
 
+    ACTIVE = {"running", "pending", "launching", "launched", "restarting"}
+
     def __init__(self):
         self.config = ProcessConfig()
         self.api = ProcessComposeAPI(self.config)
@@ -35,6 +37,31 @@ class ProcessService:
         }
 
         return {"server": server, "nodes": nodes}
+
+    def wait_node(self, name, running, timeout=30):
+        """Nodeが目的の状態になるまで待機する。"""
+        deadline = time.monotonic() + timeout
+
+        while time.monotonic() < deadline:
+            state = self.api.states().get(name)
+
+            if state is None:
+                raise RuntimeError(f"Node not registered: {name}")
+
+            normalized = state.strip().lower()
+
+            if running and normalized == "running":
+                return
+
+            if not running and normalized not in self.ACTIVE:
+                return
+
+            if running and normalized in {"error", "failed", "completed"}:
+                raise RuntimeError(f"Node startup failed: {name} ({state})")
+
+            time.sleep(0.2)
+
+        raise TimeoutError(f"Node state timeout: {name}, running={running}")
 
     def apply_missing(self):
         """未登録の有効Nodeを一括登録する。"""
@@ -69,6 +96,55 @@ class ProcessService:
             time.sleep(0.2)
 
         raise RuntimeError(f"Project update failed: {pending}; response={result}")
+
+    def remove_missing(self):
+        """YAMLから削除された停止済みNodeをProjectから削除する。"""
+        states = self.api.states()
+        removed = []
+
+        for name, state in states.items():
+            if name in self.config.nodes:
+                continue
+
+            # Running/Pendingなどの稼働中Nodeは削除しない。
+            if state.strip().lower() in self.ACTIVE:
+                print(f"[NODE SKIP] {name}: {state}", flush=True)
+                continue
+
+            removed.append(name)
+
+        if not removed:
+            return []
+
+        # 削除対象以外の登録情報を保持する。
+        processes = {
+            name: self.api.process_info(name)
+            for name in states
+            if name not in removed
+        }
+
+        result = self.api.update_project(processes)
+
+        # Project更新後、削除が反映されたことを確認する。
+        deadline = time.monotonic() + 5
+
+        while time.monotonic() < deadline:
+            current = self.api.states()
+            remaining = [name for name in removed if name in current]
+
+            if not remaining:
+                for name in removed:
+                    print(f"[NODE REMOVE] {name}", flush=True)
+                return removed
+
+            time.sleep(0.2)
+
+        raise RuntimeError(f"Node removal failed: {remaining}; response={result}")
+
+    def sync_nodes(self):
+        """Nodeの追加と削除を同期する。"""
+        self.remove_missing()
+        self.apply_missing()
 
     def save_cache(self):
         """サーバーの登録情報を取得してComposeキャッシュへ保存する。"""
@@ -190,15 +266,14 @@ class ProcessService:
             raise RuntimeError(f"Node not registered: {name}")
 
         state = states[name].strip().lower()
-        active = {"running", "launching", "launched", "restarting"}
 
         if action == "stop":
-            if state not in active:
+            if state not in self.ACTIVE:
                 return
             self.api.stop_node(name)
 
         elif action == "start":
-            if state == "running":
+            if state in self.ACTIVE:
                 return
             self.api.start_node(name)
 
@@ -211,23 +286,109 @@ class ProcessService:
             # Project更新で自動起動した場合は二重起動を避ける。
             current = self.api.states().get(name, "").strip().lower()
 
-            if current not in active:
+            if current not in self.ACTIVE:
                 self.api.start_node(name)
+
+    def start_all(self):
+        """有効NodeをYAML定義順に起動する。"""
+        self.sync_nodes()
+
+        for name, node in self.config.nodes.items():
+            if not node.get("enabled", True):
+                print(f"[NODE SKIP] {name}: Disabled", flush=True)
+                continue
+
+            state = self.api.states().get(name, "").strip().lower()
+
+            if state == "running":
+                print(f"[NODE SKIP] {name}: Running", flush=True)
+                continue
+
+            print(f"[NODE START] {name}", flush=True)
+
+            # 個別操作と同じAPIを使用する。
+            self.node("start", name)
+
+            # Runningになるまで待ってから次のNodeを起動する。
+            self.wait_node(name, running=True)
+            print(f"[NODE RUNNING] {name}", flush=True)
+
+    def stop_all(self):
+        """登録済みNodeを逆順に停止する。"""
+        states = self.api.states()
+
+        # YAMLから削除済みのNodeも停止対象とする。
+        names = list(states)
+
+        for name in reversed(names):
+            state = self.api.states().get(name, "").strip().lower()
+
+            if state not in self.ACTIVE:
+                print(f"[NODE SKIP] {name}: {state}", flush=True)
+                continue
+
+            print(f"[NODE STOP] {name}", flush=True)
+
+            # YAMLから削除済みのNodeも停止できるようAPIを直接使用する。
+            self.api.stop_node(name)
+
+            # 停止完了を確認してから次のNodeを停止する。
+            self.wait_node(name, running=False)
+            print(f"[NODE STOPPED] {name}", flush=True)
+
+        # 停止後、削除可能になったNodeを反映する。
+        self.sync_nodes()
+
+    def restart_all(self):
+        """全Node停止後、YAML定義順に起動する。"""
+        self.stop_all()
+        self.start_all()
 
     def execute(self, action, name=None):
         """GUIからの操作を実行し、画面表示用の状態を返す。"""
+        print(f"[SERVICE] action={action} node={name}", flush=True)
+
         if action == "refresh":
             self.config.reload()
+
+            # サーバー稼働中のみNodeの追加・削除を同期する。
+            if self.snapshot()["server"] == "Running":
+                self.sync_nodes()
+
         elif action == "server_start":
             self.start_server()
+            self.sync_nodes()
+
         elif action == "server_stop":
             self.stop_server()
+
         elif action == "server_restart":
             self.stop_server()
             self.start_server()
+            self.sync_nodes()
+
         elif action in ("start", "stop", "restart"):
+            self.config.reload()
             self.node(action, name)
+
+            # 停止時には削除待ちNodeも同期する。
+            if action == "stop":
+                self.sync_nodes()
+
+        elif action == "start_all":
+            self.config.reload()
+            self.start_all()
+
+        elif action == "stop_all":
+            self.config.reload()
+            self.stop_all()
+
+        elif action == "restart_all":
+            self.config.reload()
+            self.restart_all()
+
         else:
             raise ValueError(f"Unknown action: {action}")
 
+        print(f"[SERVICE DONE] action={action}", flush=True)
         return self.snapshot()
