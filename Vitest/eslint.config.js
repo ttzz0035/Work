@@ -1,6 +1,20 @@
 import js from "@eslint/js";
 import globals from "globals";
 
+// FUXAの事前読み込みモジュールを追加する。
+// 登録した識別子のみ、未定義変数エラーの対象から除外する。
+const fuxaGlobals = {
+  $getTag: "readonly",
+  $setTag: "readonly",
+  $getTagId: "readonly",
+  require: "readonly",
+  console: "readonly",
+
+  // 追加モジュールはここに追記する。
+  // moment: "readonly",
+  // lodash: "readonly",
+};
+
 export default [
   {
     // 生成物と依存ライブラリは解析対象から除外する。
@@ -22,11 +36,8 @@ export default [
 
       // FUXA実行環境が提供するAPIを宣言する。
       globals: {
-        $getTag: "readonly",
-        $setTag: "readonly",
-        $getTagId: "readonly",
-        axios: "readonly",
         ...globals.es2021,
+        ...fuxaGlobals,
       },
     },
 

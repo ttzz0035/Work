@@ -17,6 +17,8 @@
  *   axios-mock-adapterを使い、実HTTP通信を行わない。
  */
 
+const axios = require("axios");
+
 // Axiosの戻り値に応じてFUXAタグを更新する。
 try {
   // 外部APIから現在の運転状態を取得する。
