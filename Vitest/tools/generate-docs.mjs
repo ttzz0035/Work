@@ -88,10 +88,103 @@ function description(source, name) {
 // テンプレートリテラルをフロー図専用の単一表示式へ変換する。
 // ${}内の参照変数を独立した処理ノードとして展開させない。
 // 変換は図の生成時だけ行い、実際のソースやテストには影響させない。
+// テンプレートリテラルをフロー図専用の単一表示式へ変換する。
+// ${}内の参照変数を独立した処理ノードとして展開させない。
+// 変換は図の生成時だけ行い、実際のソースやテストには影響させない。
 function flowDisplayCode(code) {
   const tree = parse(code, { sourceType: "script" });
 
+  // Promiseチェーンのコールバックをフロー図用の処理文に展開する。
+  function callbackBody(callback) {
+    if (!t.isArrowFunctionExpression(callback) &&
+        !t.isFunctionExpression(callback)) return null;
+
+    // returnを伴うコールバックは、値の伝播を誤表現しないよう変換しない。
+    if (t.isBlockStatement(callback.body)) {
+      if (callback.body.body.some(node => t.isReturnStatement(node))) return null;
+      return callback.body.body.map(node => generate(node).code).join("\n");
+    }
+
+    return `${generate(callback.body).code};`;
+  }
+
+  // Promiseの成功・失敗・共通終了を、フロー図用の制御構造へ変換する。
+  function promiseFlow(node) {
+    let current = t.isAwaitExpression(node) ? node.argument : node;
+    const stages = [];
+
+    while (t.isCallExpression(current) &&
+           t.isMemberExpression(current.callee) &&
+           !current.callee.computed &&
+           t.isIdentifier(current.callee.property)) {
+      const method = current.callee.property.name;
+      if (!["then", "catch", "finally"].includes(method)) break;
+      if (current.arguments.length !== 1) return null;
+
+      stages.unshift({ method, callback: current.arguments[0] });
+      current = current.callee.object;
+    }
+
+    // 今回対応する標準的なPromiseチェーンに限定する。
+    if (stages.map(stage => stage.method).join(",") !== "then,catch,finally") {
+      return null;
+    }
+
+    const [thenStage, catchStage, finallyStage] = stages;
+    const thenBody = callbackBody(thenStage.callback);
+    const catchBody = callbackBody(catchStage.callback);
+    const finallyBody = callbackBody(finallyStage.callback);
+
+    if ([thenBody, catchBody, finallyBody].some(body => body === null)) {
+      return null;
+    }
+
+    const thenParam = thenStage.callback.params[0];
+    const catchParam = catchStage.callback.params[0];
+
+    if (thenParam && !t.isIdentifier(thenParam)) return null;
+    if (catchParam && !t.isIdentifier(catchParam)) return null;
+    if (finallyStage.callback.params.length) return null;
+
+    const base = generate(current).code;
+    const success = thenParam
+      ? `const ${thenParam.name} = await ${base};`
+      : `await ${base};`;
+    const errorName = catchParam?.name ?? "__promiseError";
+
+    // ここで生成するコードは図示専用であり、実行しない。
+    const display = `
+      async function __promiseFlow() {
+        try {
+          ${success}
+          ${thenBody}
+        } catch (${errorName}) {
+          ${catchBody}
+        } finally {
+          ${finallyBody}
+        }
+      }
+    `;
+
+    try {
+      const parsed = parse(display, { sourceType: "script" });
+      return parsed.program.body[0].body.body[0];
+    } catch {
+      return null;
+    }
+  }
+
   traverse(tree, {
+    // Promiseチェーンは通常のメソッド呼び出しとして分解せず、
+    // 成功・失敗・共通終了の経路を持つ構造に変換する。
+    ExpressionStatement(p) {
+      const converted = promiseFlow(p.node.expression);
+      if (!converted) return;
+
+      p.replaceWith(converted);
+      p.skip();
+    },
+
     TemplateLiteral(p) {
       // テンプレート文字列全体を、元の表記を保持した文字列にする。
       const display = generate(p.node, { comments: false }).code;

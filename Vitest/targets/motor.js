@@ -33,3 +33,21 @@ await $setTag("message", message);
 const message_lite = `Motor: ${motor}, Status: ${status}`;
 
 await $setTag("aaa", message_lite);
+
+const result = await Promise.all([
+  $getTag("temperature"),
+  $getTag("pressure"),
+]);
+
+await $setTag("result", result);
+
+await Promise.resolve("OK")
+  .then(value => {
+    $setTag("status", value);
+  })
+  .catch(error => {
+    $setTag("status", "ERROR");
+  })
+  .finally(() => {
+    $setTag("completed", true);
+  });
