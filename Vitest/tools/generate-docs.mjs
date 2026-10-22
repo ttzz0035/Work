@@ -186,8 +186,53 @@ function conditionTable(conditions) {
 }
 
 function jsdocSource(source, name, summary) {
-  const clean = summary.replace(/\*\//g, "* /");
-  return `/**\n * @module ${name}\n * @description ${clean}\n */\n${wrap(source)}\n`;
+  // ファイル先頭のコメントを取り出す。
+  const header = source.match(/^\s*(\/\*\*?[\s\S]*?\*\/)/);
+  const body = header ? source.slice(header[0].length) : source;
+
+  let moduleDoc;
+
+  if (header) {
+    // 通常のブロックコメントもJSDocとして扱う。
+    const content = header[1]
+      .replace(/^\/\*\*?/, "")
+      .replace(/\*\/$/, "")
+      .split(/\r?\n/)
+      .map(line => line.replace(/^\s*\*?\s?/, ""))
+      .map(line => line.replace(/^@file\s+/, "ファイル: "));
+
+    moduleDoc = [
+      "/**",
+      ` * @module ${name}`,
+      ...content.map(line => line ? ` * ${line}` : " *"),
+      " */",
+    ].join("\n");
+  } else {
+    moduleDoc = [
+      "/**",
+      ` * @module ${name}`,
+      ` * @description ${summary.replace(/\*\//g, "* /")}`,
+      " */",
+    ].join("\n");
+  }
+
+  // awaitを含むFUXAスクリプトを解析する。
+  const tree = parse(wrap(body), {
+    sourceType: "script",
+    attachComment: true,
+  });
+
+  const statements = tree.program.body[0].body.body;
+
+  // 実際の関数・クラス定義だけをJSDoc用ソースへ出力する。
+  const definitions = statements
+    .filter(node => [
+      "FunctionDeclaration",
+      "ClassDeclaration",
+    ].includes(node.type))
+    .map(node => generate(node, { comments: true }).code);
+
+  return [moduleDoc, ...definitions].join("\n\n") + "\n";
 }
 
 function build(file) {
