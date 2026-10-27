@@ -1,12 +1,15 @@
+
 import fs from "node:fs";
 import path from "node:path";
 import fc from "fast-check";
 import { describe, it } from "vitest";
 import { parse } from "@babel/parser";
 import traverseModule from "@babel/traverse";
+import generateModule from "@babel/generator";
 import framework from "../framework.cjs";
 
 const traverse = traverseModule.default ?? traverseModule;
+const generate = generateModule.default ?? generateModule;
 const { FuxaDriver } = framework;
 const SCRIPT_DIR = path.resolve("targets");
 const MAX_COMBINATIONS = 1024;
@@ -49,6 +52,80 @@ function compare(a, op, b) {
   }
 }
 
+// await式を取り除き、元の式のPathを返す。
+function unwrapAwait(p) {
+  if (!p?.node) return null;
+  return p.isAwaitExpression() ? p.get("argument") : p;
+}
+
+// BabelのPathから$getTagの参照名を静的に解析する。
+// 動的にしか決定できない参照は、呼び出し元で未解決として扱う。
+function resolveTagCall(p, tags, unresolved, filename) {
+  const expression = unwrapAwait(p);
+  if (!expression?.isCallExpression()) return null;
+  if (!expression.get("callee").isIdentifier({ name: "$getTag" })) return null;
+
+  const argument = expression.get("arguments")[0];
+
+  if (!argument?.node) {
+    unresolved.set(`missing:${expression.node.start}`, {
+      line: Math.max(1, (expression.node.loc?.start.line ?? 2) - 1),
+      expression: "$getTag()",
+      reason: "Missing $getTag argument",
+    });
+    return null;
+  }
+
+  // Babelのスコープ情報を使って、変数・文字列結合を評価する。
+  const evaluated = argument.evaluate();
+
+  if (evaluated.confident && typeof evaluated.value === "string") {
+    const name = evaluated.value;
+    if (!tags.has(name)) tags.set(name, new Set());
+    return name;
+  }
+
+  // 解決できない場合も、解析全体を例外で停止させない。
+  const expressionCode = generate(argument.node).code;
+
+  unresolved.set(`dynamic:${expression.node.start}`, {
+    line: Math.max(1, (expression.node.loc?.start.line ?? 2) - 1),
+    expression: expressionCode,
+    reason: `INPUT_SCHEMA_REQUIRED: ${filename}`,
+  });
+
+  return null;
+}
+
+// 比較式の左辺・右辺が参照するFUXAタグを解決する。
+function resolveTagReference(p, tags, variables, unresolved, filename) {
+  const expression = unwrapAwait(p);
+  if (!expression?.node) return null;
+
+  if (expression.isIdentifier()) {
+    return variables.get(expression.node.name) ?? null;
+  }
+
+  return resolveTagCall(expression, tags, unresolved, filename);
+}
+
+// 境界値を対象タグへ登録する。
+function registerBoundaryValues(values, value) {
+  if (typeof value === "number") {
+    [value - 1, value, value + 1].forEach(v => values.add(v));
+  } else if (typeof value === "string") {
+    values.add(value);
+    values.add(`${value}__other__`);
+  } else if (typeof value === "boolean") {
+    values.add(true);
+    values.add(false);
+  } else {
+    values.add(null);
+    values.add(0);
+    values.add(1);
+  }
+}
+
 // FUXAタグ、条件式、Axiosの使用を解析する。
 function analyze(filename) {
   const source = fs.readFileSync(filename, "utf8");
@@ -59,36 +136,30 @@ function analyze(filename) {
   const variables = new Map();
   const predicates = [];
   const fields = new Set();
+  const unresolved = new Map();
   let usesAxios = false;
-
-  function register(name) {
-    if (!tags.has(name)) tags.set(name, new Set());
-    return name;
-  }
-
-  function tagCall(node) {
-    if (node?.type !== "CallExpression") return null;
-    if (node.callee.type !== "Identifier") return null;
-    if (node.callee.name !== "$getTag") return null;
-    if (node.arguments[0]?.type !== "StringLiteral") {
-      throw new Error(`Dynamic $getTag unsupported: ${filename}`);
-    }
-    return register(node.arguments[0].value);
-  }
 
   // タグとHTTPレスポンスの参照を収集する。
   traverse(ast, {
     CallExpression(p) {
-      tagCall(p.node);
+      resolveTagCall(p, tags, unresolved, filename);
       const c = p.node.callee;
       if (c.type === "MemberExpression" &&
-          c.object.type === "Identifier" && c.object.name === "axios") {
+          c.object.type === "Identifier" &&  c.object.name === "axios") {
+        usesAxios = true;
+      }
+
+      // require("axios")の場合もHTTPシナリオを生成する。
+      if (c.type === "Identifier" &&
+          c.name === "require" &&
+          p.node.arguments[0]?.type === "StringLiteral" &&
+          p.node.arguments[0].value === "axios") {
         usesAxios = true;
       }
     },
     VariableDeclarator(p) {
-      if (p.node.id.type !== "Identifier") return;
-      const name = tagCall(p.node.init);
+      if (!p.get("id").isIdentifier()) return;
+      const name = resolveTagCall(p.get("init"), tags, unresolved, filename);
       if (name !== null) variables.set(p.node.id.name, name);
     },
     MemberExpression(p) {
@@ -97,22 +168,17 @@ function analyze(filename) {
       const parent = n.object;
       if (parent?.type === "MemberExpression" &&
           parent.property.type === "Identifier" &&
-          parent.property.name === "data") fields.add(n.property.name);
+          parent.property.name === "data") {fields.add(n.property.name);}
     },
   });
-
-  function resolve(node) {
-    if (node?.type === "Identifier") return variables.get(node.name) ?? null;
-    return tagCall(node);
-  }
 
   // 比較条件と、真偽を切り替えられる境界値を抽出する。
   traverse(ast, {
     BinaryExpression(p) {
       const n = p.node;
       if (!["<", "<=", ">", ">=", "==", "===", "!=", "!=="].includes(n.operator)) return;
-      const left = resolve(n.left);
-      const right = resolve(n.right);
+      const left = resolveTagReference(p.get("left"), tags, variables, unresolved, filename);
+      const right = resolveTagReference(p.get("right"), tags, variables, unresolved, filename);
       if (left === null && right === null) return;
       if (left !== null && right !== null) {
         throw new Error(`Tag-to-tag comparison unsupported: ${filename}`);
@@ -120,34 +186,37 @@ function analyze(filename) {
 
       const tag = left ?? right;
       const value = constantOf(left !== null ? n.right : n.left);
-      if (value === undefined) throw new Error(`Unsupported comparison: ${filename}`);
+      if (value === undefined) {throw new Error(`Unsupported comparison: ${filename}`);}
 
       // 条件を評価する関数を保存する。左右の順序も維持する。
       predicates.push(input => left !== null
         ? compare(input[tag], n.operator, value)
         : compare(value, n.operator, input[tag]));
 
-      const values = tags.get(tag);
-      if (typeof value === "number") {
-        [value - 1, value, value + 1].forEach(v => values.add(v));
-      } else if (typeof value === "string") {
-        values.add(value);
-        values.add(`${value}__other__`);
-      } else if (typeof value === "boolean") {
-        values.add(true);
-        values.add(false);
-      } else {
-        values.add(null);
-        values.add(0);
-        values.add(1);
-      }
+      registerBoundaryValues(tags.get(tag), value);
     },
   });
 
+  // 境界値の根拠がないタグも未対応として記録する。
+  // カバレッジ取得自体は継続できるよう、基本入力を用意する。
   for (const [tag, values] of tags) {
-    if (!values.size) throw new Error(`No input constraints for: ${tag}`);
+    if (values.size) continue;
+
+    unresolved.set(`constraints:${tag}`, {
+      line: null,
+      expression: tag,
+      reason: "INPUT_SCHEMA_REQUIRED: No input constraints",
+    });
+
+    [false, true, 0, 1, -1, "", "OK", null].forEach(v => values.add(v));
   }
-  return { tags, predicates, fields, usesAxios };
+  return {
+    tags,
+    predicates,
+    fields,
+    usesAxios,
+    unresolved: [...unresolved.values()],
+  };
 }
 
 // 全候補を生成し、条件の真偽パターンで優先順位を決める。
@@ -198,7 +267,7 @@ function generateCases(tags, predicates) {
       for (let a = 0; a < bits.length; a++) {
         if (!covered.has(`${a}:${bits[a]}`)) score += 100;
         for (let b = a + 1; b < bits.length; b++) {
-          if (!covered.has(`${a}:${b}:${bits[a]}:${bits[b]}`)) score += 1;
+          if (!covered.has(`${a}:${b}:${bits[a]}:${bits[b]}`)) score++;
         }
       }
       if (score > bestScore) {
@@ -248,9 +317,15 @@ function registerTest(filename) {
 
       // 解析と計測準備を分離し、一方が失敗しても実行可能な工程を試す。
       try {
-        const { tags, predicates, fields, usesAxios } = analyze(filename);
+        const { tags, predicates, fields, usesAxios, unresolved } = analyze(filename);
         inputs = generateCases(tags, predicates);
         httpCases = generateHttpCases(fields, usesAxios);
+
+        // 未解決タグは報告するが、実行可能なケースを捨てない。
+        for (const item of unresolved) {
+          const location = item.line === null ? "" : `Line ${item.line}: `;
+          errors.push(`${location}${item.reason}: ${item.expression}`);
+        }
       } catch (error) {
         errors.push(`Analyze: ${error.message}`);
       }
@@ -315,8 +390,8 @@ function registerTest(filename) {
   });
 }
 
-if (!fs.existsSync(SCRIPT_DIR)) throw new Error(`targets directory not found: ${SCRIPT_DIR}`);
+if (!fs.existsSync(SCRIPT_DIR)) {throw new Error(`targets directory not found: ${SCRIPT_DIR}`);}
 const files = discover(SCRIPT_DIR);
-if (!files.length) throw new Error("No FUXA JavaScript files found");
+if (!files.length) {throw new Error("No FUXA JavaScript files found");}
 
 for (const file of files) registerTest(file);
