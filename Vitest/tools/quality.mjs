@@ -1,3 +1,4 @@
+
 import fs from "node:fs";
 import { spawnSync } from "node:child_process";
 
@@ -21,18 +22,17 @@ const results = [];
 
 // 各工程が失敗しても後続の実行を継続する。
 for (const check of checks) {
-  console.log(`\n========== ${check.name} ==========\n`);
-
   const result = spawnSync(process.execPath, [npmCli, "run", check.script], {
-    stdio: "inherit",
+    encoding: "utf8",
     shell: false,
     windowsHide: true,
+    maxBuffer: 50 * 1024 * 1024,
   });
 
   const passed = !result.error && result.status === 0;
-  results.push({ name: check.name, passed });
+  const output = [result.stdout, result.stderr, result.error?.message].filter(Boolean).join("\n");
 
-  if (result.error) console.error(`[ERROR] ${result.error.message}`);
+  results.push({ name: check.name, passed, output });
 }
 
 // 最後に全工程の結果を集計する。
@@ -48,5 +48,15 @@ const failed = results.length - passed;
 console.log(`\nPassed: ${passed}`);
 console.log(`Failed: ${failed}`);
 console.log(`Total : ${results.length}`);
+
+// 失敗した工程のログだけを最後に表示する。
+if (failed > 0) {
+  console.log("\n========== FAILED DETAILS ==========");
+
+  for (const result of results.filter((result) => !result.passed)) {
+    console.log(`\n========== ${result.name} ==========\n`);
+    console.log(result.output || "実行結果を取得できませんでした。");
+  }
+}
 
 process.exitCode = failed > 0 ? 1 : 0;

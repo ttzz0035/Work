@@ -1,5 +1,6 @@
 import js from "@eslint/js";
 import globals from "globals";
+import babelParser from "@babel/eslint-parser";
 
 // FUXAの事前読み込みモジュールを追加する。
 // 登録した識別子のみ、未定義変数エラーの対象から除外する。
@@ -28,18 +29,24 @@ export default [
     // FUXAスクリプトを静的解析する。
     files: ["targets/**/*.js"],
 
-    languageOptions: {
-      ecmaVersion: "latest",
-
-      // トップレベルawaitを含むFUXAスクリプトを解析する。
-      sourceType: "module",
-
-      // FUXA実行環境が提供するAPIを宣言する。
-      globals: {
-        ...globals.es2021,
-        ...fuxaGlobals,
+  languageOptions: {
+    parser: babelParser,
+    ecmaVersion: "latest",
+    sourceType: "script",
+    parserOptions: {
+      requireConfigFile: false,
+      babelOptions: {
+        parserOpts: {
+          allowReturnOutsideFunction: true,
+          allowAwaitOutsideFunction: true,
+        },
       },
     },
+    globals: {
+      ...globals.es2021,
+      ...fuxaGlobals,
+    },
+  },
 
     // ESLint標準の推奨ルールを使用する。
     rules: {

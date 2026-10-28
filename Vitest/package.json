@@ -12,6 +12,7 @@
     "quality": "node tools/quality.mjs"
   },
   "devDependencies": {
+    "@babel/eslint-parser": "^8.0.7",
     "@babel/generator": "^7.28.0",
     "@babel/parser": "^7.28.0",
     "@babel/traverse": "^7.28.0",

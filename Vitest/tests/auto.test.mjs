@@ -39,7 +39,8 @@ function constantOf(node) {
 // 入力候補の重複を除去する。
 function addCandidate(values, value) {
   if (typeof value === "number" && !Number.isFinite(value)) return;
-  if (!values.some(existing => JSON.stringify(existing) === JSON.stringify(value))) values.push(value);
+  const key = JSON.stringify(value);
+  if (!values.some(existing => JSON.stringify(existing) === key)) values.push(value);
 }
 
 // 入力元を解析する。条件式自体はここでは評価しない。
@@ -56,7 +57,6 @@ function analyze(filename) {
   traverse(ast, {
     CallExpression(p) {
       const callee = p.get("callee");
-
       if (callee.isIdentifier({ name: "$getTag" })) {
         const argument = p.get("arguments")[0];
         if (!argument?.node) {
@@ -86,15 +86,16 @@ function analyze(filename) {
     NumericLiteral(p) {
       addCandidate(literals, p.node.value);
     },
-
     StringLiteral(p) {
       addCandidate(literals, p.node.value);
     },
-
     BooleanLiteral(p) {
       addCandidate(literals, p.node.value);
     },
-
+    UnaryExpression(p) {
+      const value = constantOf(p.node);
+      if (value !== undefined) addCandidate(literals, value);
+    },
     MemberExpression(p) {
       const node = p.node;
       if (node.computed || node.property.type !== "Identifier") return;
@@ -111,8 +112,6 @@ function analyze(filename) {
 // 比較値の近傍と汎用値から入力候補を生成する。
 function generateValues(literals) {
   const values = [];
-
-  // 型判定、真偽判定、配列判定などにも使用する基本候補。
   const defaults = [false, true, null, -1, 0, 1, -0.5, 0.5, 1.5, "", "OK", "0", "1", [], [0], [1], {}, { value: 0 }];
 
   for (const value of defaults) addCandidate(values, value);
@@ -120,17 +119,13 @@ function generateValues(literals) {
   // 条件式に現れた定数の境界付近を探索する。
   for (const value of literals) {
     addCandidate(values, value);
-
     if (typeof value === "number") {
       addCandidate(values, value - 1);
       addCandidate(values, value + 1);
       addCandidate(values, value - 0.5);
       addCandidate(values, value + 0.5);
     }
-
-    if (typeof value === "string") {
-      addCandidate(values, `${value}__other__`);
-    }
+    if (typeof value === "string") addCandidate(values, `${value}__other__`);
   }
 
   return values;
@@ -140,33 +135,27 @@ function generateValues(literals) {
 function generateCases(tags, literals) {
   const values = generateValues(literals);
   const names = [...tags.keys()];
-
   if (!names.length) return [{}];
 
-  const entries = names.map(name => [name, values]);
-  const total = entries.reduce((count, [, candidates]) => count * candidates.length, 1);
   const unique = new Map();
+  const add = input => {
+    if (unique.size < MAX_COMBINATIONS) unique.set(JSON.stringify(input), input);
+  };
 
-  // 比較条件の真偽が変化しやすい値を優先する。
-  const priority = [-1, 0, 1, 1.5, false, true, null, "", "OK"];
-  const baseValues = priority.filter(value => values.some(candidate => Object.is(candidate, value)));
-
-  // 代表的な入力を先に試す。
+  // 変数同士の比較を通すため、各入力に異なる値を割り当てる。
   for (const value of values) {
-    const input = Object.fromEntries(names.map(name => [name, value]));
-    unique.set(JSON.stringify(input), input);
+    add(Object.fromEntries(names.map(name => [name, value])));
   }
 
-  // 各入力を独立して変更するケースも加える。
   for (const name of names) {
     for (const value of values) {
       const input = Object.fromEntries(names.map(key => [key, 0]));
       input[name] = value;
-      unique.set(JSON.stringify(input), input);
+      add(input);
     }
   }
 
-  // 変数同士の比較に対応するため、入力ペアの全組合せを生成する。
+  // 入力ペアの組合せを優先して生成する。
   for (let i = 0; i < names.length; i++) {
     for (let j = i + 1; j < names.length; j++) {
       for (const left of values) {
@@ -174,51 +163,34 @@ function generateCases(tags, literals) {
           const input = Object.fromEntries(names.map(name => [name, 0]));
           input[names[i]] = left;
           input[names[j]] = right;
-          unique.set(JSON.stringify(input), input);
+          add(input);
         }
       }
     }
   }
 
-  // AND/ORに複数変数が存在する場合の同時変更を試す。
-  // 組合せ爆発を防ぐため、代表値を使用する。
-  let combinations = [{}];
-
-  for (const name of names) {
-    if (combinations.length * baseValues.length > MAX_COMBINATIONS) break;
-    combinations = combinations.flatMap(row => baseValues.map(value => ({ ...row, [name]: value })));
-  }
-
-  for (const combination of combinations) {
-    const input = Object.fromEntries(names.map(name => [name, 0]));
-    Object.assign(input, combination);
-    unique.set(JSON.stringify(input), input);
-  }
-
   // 全境界値の組合せも保持し、探索漏れを防ぐ。
+  const total = values.length ** names.length;
   if (total <= MAX_COMBINATIONS) {
     let exhaustive = [{}];
-
-    for (const [name, candidates] of entries) {
-      exhaustive = exhaustive.flatMap(row => candidates.map(value => ({ ...row, [name]: value })));
+    for (const name of names) {
+      exhaustive = exhaustive.flatMap(row => values.map(value => ({ ...row, [name]: value })));
     }
-
-    for (const input of exhaustive) unique.set(JSON.stringify(input), input);
+    for (const input of exhaustive) add(input);
   }
 
   // fast-checkによる再現可能な探索候補を作る。
-  const arbitrary = fc.record(Object.fromEntries(entries.map(([name, candidates]) => [name, fc.constantFrom(...candidates)])));
+  const arbitrary = fc.record(Object.fromEntries(names.map(name => [name, fc.constantFrom(...values)])));
   const sampled = fc.sample(arbitrary, { seed: SEED, numRuns: MAX_COMBINATIONS });
 
-  for (const input of sampled) unique.set(JSON.stringify(input), input);
+  for (const input of sampled) add(input);
 
-  return [...unique.values()].slice(0, MAX_COMBINATIONS);
+  return [...unique.values()];
 }
 
 // 実行済みの入力を変異させ、未探索の候補を生成する。
 function mutate(input, names, values, random) {
   const result = structuredClone(input);
-
   if (!names.length) return result;
 
   const count = Math.max(1, Math.ceil(names.length * random()));
@@ -228,8 +200,8 @@ function mutate(input, names, values, random) {
 
     // 数値の場合は、実行した値の近傍も探索する。
     if (typeof current === "number" && random() < 0.5) {
-      const offset = [-1, -0.5, 0.5, 1][Math.floor(random() * 4)];
-      result[name] = current + offset;
+      const offsets = [-1, -0.5, 0.5, 1];
+      result[name] = current + offsets[Math.floor(random() * offsets.length)];
     } else {
       result[name] = structuredClone(values[Math.floor(random() * values.length)]);
     }
@@ -263,7 +235,6 @@ function coverageGain(previous, current) {
 // HTTPは通信せず、Axiosの戻り値・例外のみ模擬する。
 function generateHttpCases(fields, enabled) {
   if (!enabled) return [null];
-
   const data = value => Object.fromEntries([...fields].map(name => [name, value]));
 
   return [
@@ -285,10 +256,7 @@ function sourceLocation(filename, line) {
 // 未網羅の文・分岐・基本条件をテスト対象コードから報告する。
 function coverageErrors(driver, filename) {
   const errors = [];
-
-  if (!driver.coverage.files().includes(driver.file)) {
-    return ["Coverage unavailable: no executed instrumented script"];
-  }
+  if (!driver.coverage.files().includes(driver.file)) return ["Coverage unavailable: no executed instrumented script"];
 
   const file = driver.coverage.fileCoverageFor(driver.file);
 
@@ -298,15 +266,13 @@ function coverageErrors(driver, filename) {
   for (const [id, count] of Object.entries(file.s)) {
     if (count > 0) continue;
     const location = file.statementMap[id];
-    const line = lineOf(location.start.line);
-    errors.push(`[C0] ${sourceLocation(filename, line)}`);
+    errors.push(`[C0] ${sourceLocation(filename, lineOf(location.start.line))}`);
   }
 
   for (const [id, counts] of Object.entries(file.b)) {
     if (counts.every(count => count > 0)) continue;
     const branch = file.branchMap[id];
-    const line = lineOf(branch.line);
-    errors.push(`[C1] ${sourceLocation(filename, line)}\n  Branch: ${counts.map((count, index) => `${index + 1}=${count}`).join(", ")}`);
+    errors.push(`[C1] ${sourceLocation(filename, lineOf(branch.line))}\n  Branch: ${counts.map((count, index) => `${index + 1}=${count}`).join(", ")}`);
   }
 
   for (const condition of driver.summary().conditions) {
@@ -355,6 +321,7 @@ function registerTest(filename) {
         const values = generateValues(info.literals);
         const selected = [];
         const seen = new Set();
+        const queue = [...inputs];
         let complete = false;
 
         // fast-checkと同じシードから再現可能な変異系列を作る。
@@ -363,8 +330,6 @@ function registerTest(filename) {
         const random = () => randomValues[randomIndex++ % randomValues.length];
 
         // 実行済みケースの中からカバレッジを増やした入力を優先する。
-        const queue = [...inputs];
-
         for (let index = 0; index < queue.length && executed < MAX_COMBINATIONS * 2; index++) {
           const input = queue[index];
           const key = JSON.stringify(input);
@@ -372,16 +337,15 @@ function registerTest(filename) {
           seen.add(key);
 
           for (const httpCase of httpCases) {
+            if (executed >= MAX_COMBINATIONS * 2) break;
             executed++;
             const previous = coverageSignature(driver);
-            let successful = false;
 
             try {
               await driver.run(input, [], httpCase);
-              successful = true;
             } catch (error) {
-              const location = `${name}: ${error.message}`;
-              runtimeErrors.set(location, (runtimeErrors.get(location) ?? 0) + 1);
+              const message = error.message;
+              runtimeErrors.set(message, (runtimeErrors.get(message) ?? 0) + 1);
             }
 
             const current = coverageSignature(driver);
@@ -398,13 +362,9 @@ function registerTest(filename) {
 
             const result = driver.summary();
             complete = result.c0 === 100 && result.c1 === 100 && result.c2 === 100;
-
-            // 過去のケースで失敗があれば、残りのケースも続行。
-            if (complete && successful && !errors.length) break;
-            if (executed >= MAX_COMBINATIONS * 2) break;
+            if (complete) break;
           }
-
-          if (complete && !errors.length && !runtimeErrors.size) break;
+          if (complete) break;
         }
 
         // 未網羅が残っている場合、効果の高かった入力を優先して追加探索する。
@@ -422,8 +382,8 @@ function registerTest(filename) {
               try {
                 await driver.run(input, [], null);
               } catch (error) {
-                const location = `${name}: ${error.message}`;
-                runtimeErrors.set(location, (runtimeErrors.get(location) ?? 0) + 1);
+                const message = error.message;
+                runtimeErrors.set(message, (runtimeErrors.get(message) ?? 0) + 1);
               }
 
               const result = driver.summary();
@@ -437,15 +397,11 @@ function registerTest(filename) {
         }
       }
 
-      console.log(`\n=== ${name} ===`);
-      console.log(`Generated tag cases: ${inputs.length}`);
-      console.log(`HTTP scenarios: ${httpCases.length}`);
-      console.log(`Executed cases: ${executed}`);
-
       // 実行途中でエラーが発生しても、取得済みの計測結果を出力する。
       if (driver) {
         try {
-          driver.report(`coverage/${reportName}`, 100);
+          // HTML生成と品質判定を分離する。閾値判定は下で一度だけ行う。
+          driver.report(`coverage/${reportName}`, 0);
         } catch (error) {
           errors.push(`Report: ${error.message}`);
         }
@@ -469,13 +425,17 @@ function registerTest(filename) {
 
       // すべてのレポート出力後に品質ゲートを判定する。
       if (errors.length) {
+        const result = driver?.summary();
         console.error(`\n========== [FAIL] ${name} ==========`);
-        for (const message of errors) console.error(message);
 
-        throw new AggregateError(
-          errors.map(message => new Error(message)),
-          `${name}: ${errors.length} error(s)\n${errors.join("\n")}`
-        );
+        if (result) {
+          console.error(`C0=${result.c0.toFixed(2)}% C1=${result.c1.toFixed(2)}% C2=${result.c2.toFixed(2)}%`);
+        }
+
+        for (const message of [...new Set(errors)]) console.error(message);
+
+        // Vitestへは失敗1件だけを渡し、各行を個別エラーにしない。
+        throw new Error(`Coverage failed: ${name}`);
       }
     }, 60000);
   });

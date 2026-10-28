@@ -1,6 +1,8 @@
+
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const util = require("node:util");
 const axios = require("axios");
 const AxiosMockAdapter = require("axios-mock-adapter");
 const parser = require("@babel/parser");
@@ -103,11 +105,12 @@ class FuxaDriver {
     });
 
     // C0・C1はIstanbul標準の計測処理を利用する。
+    // Babel再生成時に元の行配置を保持する。
     this.code = createInstrumenter({
       coverageVariable: "__coverage__",
       compact: false,
       preserveComments: true,
-    }).instrumentSync(generate(ast, { comments: true }).code, this.file);
+    }).instrumentSync(generate(ast, { comments: true, retainLines: true }).code, this.file);
   }
 
   async run(tags = {}, args = [], httpScenario = null) {
@@ -124,30 +127,31 @@ class FuxaDriver {
         mock.onAny().reply(status, data);
       }
 
-    const context = vm.createContext({
-      console,
-      axios: http,
-      __args: args,
+      const context = vm.createContext({
+        console,
+        axios: http,
+        __args: args,
 
-      // FUXAの事前読み込みモジュールをテスト環境で再現する。
-      // Axiosは実HTTP通信を行わず、モック済みインスタンスを返す。
-      require: name => {
-        if (name === "axios") return http;
-        throw new Error(`Unsupported module: ${name}`);
-      },
+        // FUXAの事前読み込みモジュールをテスト環境で再現する。
+        // Axiosは実HTTP通信を行わず、モック済みインスタンスを返す。
+        require: name => {
+          if (name === "axios") return http;
+          if (name === "util" || name === "node:util") return util;
+          throw new Error(`Unsupported module: ${name}`);
+        },
 
-      __c2: (id, value) => {
-        const c = this.conditions.get(id);
-        if (!c) throw new Error(`Unknown C2 condition: ${id}`);
-        if (Boolean(value)) c.trueCount++;
-        else c.falseCount++;
-        return value;
-      },
+        __c2: (id, value) => {
+          const c = this.conditions.get(id);
+          if (!c) throw new Error(`Unknown C2 condition: ${id}`);
+          if (Boolean(value)) c.trueCount++;
+          else c.falseCount++;
+          return value;
+        },
 
-      $getTag: id => stub.getTag(id),
-      $setTag: (id, value) => stub.setTag(id, value),
-      $getTagId: name => stub.getTagId(name),
-    });
+        $getTag: id => stub.getTag(id),
+        $setTag: (id, value) => stub.setTag(id, value),
+        $getTagId: name => stub.getTagId(name),
+      });
       const script = new vm.Script(
         `${this.code}\nglobalThis.__result = __fuxaScript(...__args);`,
         { filename: this.file }
@@ -198,7 +202,7 @@ class FuxaDriver {
     });
 
     const c1Rows = branches.map(b => `<tr>
-      <td>${b.line}</td><td>${esc(b.type)}</td>
+      <td>${Math.max(1, b.line - 1)}</td><td>${esc(b.type)}</td>
       <td>${b.counts.map((n, i) => `経路${i + 1}: ${n}回`).join(" / ")}</td>
       <td class="${b.covered ? "pass" : "fail"}">${b.covered ? "PASS" : "FAIL"}</td>
     </tr>`).join("");
@@ -280,16 +284,8 @@ class FuxaDriver {
       try {
         const context = libReport.createContext({ dir: output, coverageMap: this.coverage });
         reports.create("html").execute(context);
-        console.log(`[PASS] Coverage HTML: ${output}`);
       } catch (error) {
         errors.push(`Coverage HTML: ${error.message}`);
-      }
-
-      try {
-        const context = libReport.createContext({ dir: output, coverageMap: this.coverage });
-        reports.create("text").execute(context);
-      } catch (error) {
-        errors.push(`Coverage text: ${error.message}`);
       }
     } else {
       errors.push("Coverage unavailable: no executed instrumented script");
@@ -299,35 +295,21 @@ class FuxaDriver {
     if (result && this.coverage.files().includes(this.file)) {
       try {
         this.writeC2Report(output, result);
-        console.log("[PASS] C1/C2 HTML");
       } catch (error) {
         errors.push(`C1/C2 HTML: ${error.message}`);
       }
     }
 
-    console.log("\n=== FUXA COVERAGE ===");
-
-    if (result) {
-      console.log(`C0: ${result.c0.toFixed(2)}%`);
-      console.log(`C1: ${result.c1.toFixed(2)}%`);
-      console.log(`C2: ${result.c2.toFixed(2)}%`);
-
-      for (const c of result.conditions) {
-        console.log(`[${c.covered ? "PASS" : "FAIL"}] ${c.expression} TRUE=${c.trueCount} FALSE=${c.falseCount}`);
-      }
-
-      // すべてのレポート出力後に品質ゲートを判定する。
-      if ([result.c0, result.c1, result.c2].some(v => v < threshold)) {
-        errors.push(
-          `Coverage below ${threshold}%: C0=${result.c0.toFixed(2)}, ` +
-          `C1=${result.c1.toFixed(2)}, C2=${result.c2.toFixed(2)}`
-        );
-      }
+    // すべてのレポート出力後に品質ゲートを判定する。
+    if (result && [result.c0, result.c1, result.c2].some(v => v < threshold)) {
+      errors.push(
+        `Coverage below ${threshold}%: C0=${result.c0.toFixed(2)}, ` +
+        `C1=${result.c1.toFixed(2)}, C2=${result.c2.toFixed(2)}`
+      );
     }
 
     if (errors.length) {
-      for (const message of errors) console.error(`[FAIL] ${message}`);
-      throw new AggregateError(errors.map(message => new Error(message)), errors.join("\n"));
+      throw new Error(errors.join("\n"));
     }
 
     return result;
